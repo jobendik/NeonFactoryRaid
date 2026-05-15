@@ -6,6 +6,7 @@ import { Economy } from '../systems/EconomySystem';
 import { Strings } from '../config/Strings';
 import { DailyQuestSystem } from '../systems/DailyQuestSystem';
 import { AchievementSystem } from '../systems/AchievementSystem';
+import { installMigrationTest } from '../platform/MigrationTest';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -44,6 +45,10 @@ export class BootScene extends Phaser.Scene {
     AchievementSystem.init();
 
     startAutoSave();
+    // M24 — install the v0→vCURRENT migration test on window so QA can
+    // verify the migration chain via `window.__migrationTest()` in dev
+    // tools. Idempotent.
+    installMigrationTest();
     SDKBridge.loadingStop();
     BootScene.setHtmlPreloadProgress(1);
     BootScene.hideHtmlPreload();

@@ -27,7 +27,7 @@ interface SliderHandle {
 }
 
 const PANEL_W = 420;
-const PANEL_H = 520;
+const PANEL_H = 600;
 const ROW_Y_GAP = 56;
 const SLIDER_W = 240;
 const SLIDER_H = 14;
@@ -115,6 +115,13 @@ export class SettingsMenu {
     this.buildSubMenuButton((PANEL_W * 3) / 4, subY, Strings.achievementsMenuButton, () =>
       this.openAchievementsModal(),
     );
+
+    // M24 — Controls help / Credits / Reset Save. Three small buttons
+    // on a single row below the cosmetics + achievements pair.
+    const utilY = subY + 50;
+    this.buildSubMenuButton(PANEL_W / 6, utilY, 'CONTROLS', () => this.openControlsModal());
+    this.buildSubMenuButton(PANEL_W / 2, utilY, 'CREDITS', () => this.openCreditsModal());
+    this.buildSubMenuButton((PANEL_W * 5) / 6, utilY, 'RESET SAVE', () => this.openResetSaveModal());
 
     const closeBtn = scene.add
       .rectangle(PANEL_W / 2, PANEL_H - 44, 140, 36, 0x22f6ff, 1)
@@ -682,5 +689,220 @@ export class SettingsMenu {
     this.subModalRoot = null;
     this.subModalBackdrop?.destroy();
     this.subModalBackdrop = null;
+  }
+
+  // M24 — Controls help. Plain text modal listing all bindings; pure
+  // reference for first-time / lapsed players.
+  private openControlsModal(): void {
+    this.openTextModal(
+      'CONTROLS',
+      [
+        'Move      — WASD or arrow keys / floating joystick (mobile)',
+        'Dash      — Space / dash button (bottom-right)',
+        'Pause     — ESC / settings cog',
+        'Mute      — speaker icon (top-right)',
+        'Auto-aim and auto-fire — no manual aiming.',
+        '',
+        'Pickups magnetize within range; Cores drop rarely.',
+        'Hold the green pad to extract; stay past extract for Greed.',
+      ].join('\n'),
+      0x22f6ff,
+    );
+  }
+
+  // M24 — Credits. Plain text. Single column.
+  private openCreditsModal(): void {
+    this.openTextModal(
+      'CREDITS',
+      [
+        'NEON FACTORY RAID',
+        '',
+        'Design  — Per blueprint v1.0',
+        'Code    — Claude (Runs A / B / C / D)',
+        'Audio   — Web Audio synthesis, in-game',
+        'Engine  — Phaser 3',
+        '',
+        'Built for CrazyGames.',
+      ].join('\n'),
+      0xffd75a,
+    );
+  }
+
+  // M24 — Reset save. Confirmation modal so a misclick can't wipe progress.
+  private openResetSaveModal(): void {
+    const scene = this.scene;
+    const w = scene.scale.width;
+    const h = scene.scale.height;
+    const layer: Phaser.GameObjects.GameObject[] = [];
+    const bd = scene.add
+      .rectangle(0, 0, w, h, 0x000000, 0.78)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3500)
+      .setInteractive();
+    layer.push(bd);
+    const panel = scene.add
+      .rectangle(w / 2, h / 2, 480, 220, 0x101820, 0.98)
+      .setStrokeStyle(2, 0xff416b, 0.95)
+      .setScrollFactor(0)
+      .setDepth(3501);
+    layer.push(panel);
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 - 80, 'RESET SAVE?', {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: '#ff416b',
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    layer.push(
+      scene.add
+        .text(
+          w / 2,
+          h / 2 - 20,
+          'This wipes all upgrades, unlocks, cosmetics,\nstreaks, and the leaderboard locally. Are you sure?',
+          {
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            color: '#ffffff',
+            align: 'center',
+          },
+        )
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    const cancelBg = scene.add
+      .rectangle(w / 2 - 90, h / 2 + 60, 140, 36, 0x22f6ff, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3502)
+      .setInteractive({ useHandCursor: true });
+    layer.push(cancelBg);
+    layer.push(
+      scene.add
+        .text(w / 2 - 90, h / 2 + 60, 'CANCEL', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3503),
+    );
+    const confirmBg = scene.add
+      .rectangle(w / 2 + 90, h / 2 + 60, 140, 36, 0xff416b, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3502)
+      .setInteractive({ useHandCursor: true });
+    layer.push(confirmBg);
+    layer.push(
+      scene.add
+        .text(w / 2 + 90, h / 2 + 60, 'WIPE', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3503),
+    );
+    const dismiss = (): void => {
+      for (const o of layer) o.destroy();
+    };
+    cancelBg.on('pointerdown', dismiss);
+    bd.on('pointerdown', dismiss);
+    confirmBg.on('pointerdown', () => {
+      try {
+        localStorage.removeItem('nfr:save');
+      } catch {
+        // ignore quota / disabled-storage errors
+      }
+      // Hard reload so a fresh save is created cleanly. The HTML
+      // preloader will appear during the reboot.
+      window.location.reload();
+    });
+  }
+
+  // Shared text-only modal. Single block of body text + close button.
+  private openTextModal(title: string, body: string, borderColor: number): void {
+    const scene = this.scene;
+    const w = scene.scale.width;
+    const h = scene.scale.height;
+    const layer: Phaser.GameObjects.GameObject[] = [];
+    const bd = scene.add
+      .rectangle(0, 0, w, h, 0x000000, 0.78)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3500)
+      .setInteractive();
+    layer.push(bd);
+    const pW = 540;
+    const pH = 320;
+    const panel = scene.add
+      .rectangle(w / 2, h / 2, pW, pH, 0x101820, 0.98)
+      .setStrokeStyle(2, borderColor, 0.95)
+      .setScrollFactor(0)
+      .setDepth(3501);
+    layer.push(panel);
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 - pH / 2 + 22, title, {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          color: this.hexToCssColor(borderColor),
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    layer.push(
+      scene.add
+        .text(w / 2 - pW / 2 + 24, h / 2 - 80, body, {
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          color: '#ffffff',
+          lineSpacing: 4,
+          wordWrap: { width: pW - 48 },
+        })
+        .setOrigin(0, 0)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    const closeBg = scene.add
+      .rectangle(w / 2, h / 2 + pH / 2 - 30, 140, 36, borderColor, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3502)
+      .setInteractive({ useHandCursor: true });
+    layer.push(closeBg);
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 + pH / 2 - 30, 'CLOSE', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3503),
+    );
+    const dismiss = (): void => {
+      for (const o of layer) o.destroy();
+    };
+    closeBg.on('pointerdown', dismiss);
+    bd.on('pointerdown', dismiss);
+  }
+
+  private hexToCssColor(hex: number): string {
+    return `#${hex.toString(16).padStart(6, '0')}`;
   }
 }

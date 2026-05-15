@@ -316,6 +316,13 @@ export class HUDScene extends Phaser.Scene {
       .setVisible(false);
     if (keyboard) {
       keyboard.on('keydown-BACKTICK', () => this.togglePerfOverlay());
+      // M24 — ESC opens the SettingsMenu so the player has a pause /
+      // settings affordance from the keyboard. The SettingsMenu's modal
+      // backdrop blocks input to the gameplay scene beneath it.
+      keyboard.on('keydown-ESC', () => {
+        if (this.settingsMenu.isOpen()) this.settingsMenu.close();
+        else this.settingsMenu.open();
+      });
     }
 
     // M23 — achievement unlock toast bridge. AchievementSystem emits
