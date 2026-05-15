@@ -12,6 +12,13 @@ export interface RaidEndPayload {
   greedMult: number;
   // True when 50% unbanked-loot penalty was applied (state === 'failed' | 'collapsed').
   penaltyApplied: boolean;
+  // True when this was the FTUE tutorial raid (drives summary copy + downstream filters).
+  tutorial: boolean;
+}
+
+export interface RaidInitData {
+  // Set by BootScene when !save.tutorialDone, by FactoryScene's deploy pad it's false.
+  tutorial?: boolean;
 }
 
 export interface UpgradeLevels {
@@ -30,4 +37,25 @@ export interface RefineryLevels {
 export interface Vec2 {
   x: number;
   y: number;
+}
+
+export type WaypointKind = 'extract' | 'pickup' | 'powerup';
+
+export interface WaypointTarget {
+  x: number;
+  y: number;
+  kind: WaypointKind;
+}
+
+// Progressive UI reveal flags per blueprint §5.3. Each flips to true the first
+// time its unlock condition is met; never flips back. The FactoryScene's
+// upgrade panel reads these to gate row visibility.
+export interface FtueUnlocks {
+  dailyClaim: boolean;
+  droneUpgrade: boolean;
+  magnetUpgrade: boolean;
+  damageUpgrade: boolean;
+  luckUpgrade: boolean;
+  factoryBoost: boolean;
+  missionBoard: boolean;
 }

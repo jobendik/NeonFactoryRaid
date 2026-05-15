@@ -2,6 +2,9 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { Economy } from '../systems/EconomySystem';
+import { MuteButton } from '../ui/MuteButton';
+import { SettingsMenu } from '../ui/SettingsMenu';
+import { AudioBus } from '../audio/AudioBus';
 import type { RaidScene } from './RaidScene';
 import type { FactoryScene } from './FactoryScene';
 
@@ -40,6 +43,19 @@ const HP_BAR_W = 220;
 const HP_BAR_H = 14;
 const HP_LOW_RATIO = 0.30;
 
+// Active-power-up pip strip lives under the HP bar.
+const PIP_STRIP_X = 12;
+const PIP_STRIP_Y = 60;
+const PIP_W = 92;
+const PIP_H = 26;
+const PIP_GAP = 6;
+
+interface PowerupPip {
+  bg: Phaser.GameObjects.Rectangle;
+  fill: Phaser.GameObjects.Rectangle;
+  text: Phaser.GameObjects.Text;
+}
+
 export class HUDScene extends Phaser.Scene {
   private fpsText!: Phaser.GameObjects.Text;
   private hpBarBg!: Phaser.GameObjects.Rectangle;
@@ -55,6 +71,10 @@ export class HUDScene extends Phaser.Scene {
   private spmText!: Phaser.GameObjects.Text;
   private deployText!: Phaser.GameObjects.Text;
   private lastFpsUpdate = 0;
+  // Reusable pip slots (allocated once, shown/hidden per frame).
+  private powerupPips: PowerupPip[] = [];
+  private shieldPip!: PowerupPip;
+  private settingsMenu!: SettingsMenu;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -131,32 +151,39 @@ export class HUDScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2000);
 
+    // Combo sits just under the raid timer. Smaller / dimmer than greed so
+    // the eye reads the prominent yellow badge first.
     this.comboText = this.add
-      .text(cx, 52, '', {
+      .text(cx - 200, 24, '', {
         fontFamily: 'monospace',
-        fontSize: '16px',
+        fontSize: '15px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 3,
       })
-      .setOrigin(0.5, 0)
+      .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
+    // Greed badge per M14: bigger, brighter, with a contrasting background
+    // pill. Lives on the opposite side of the timer from combo so they
+    // never share screen space.
     this.greedText = this.add
-      .text(cx, 78, '', {
+      .text(cx + 200, 24, '', {
         fontFamily: 'monospace',
-        fontSize: '22px',
+        fontSize: '26px',
         color: '#ffd75a',
         stroke: '#000000',
-        strokeThickness: 4,
+        strokeThickness: 5,
+        backgroundColor: '#1a0a14',
+        padding: { x: 10, y: 4 },
       })
-      .setOrigin(0.5, 0)
+      .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     this.extractBanner = this.add
-      .text(cx, 108, '', {
+      .text(cx, 78, '', {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#72ff9f',
@@ -195,6 +222,97 @@ export class HUDScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2000)
       .setVisible(false);
+
+    // Pool of pip slots for timed power-ups. We allocate up to the same cap
+    // as PowerupSystem.active can hold (one per distinct kind = 4 timed
+    // entries today). Anything beyond that just stops rendering.
+    for (let i = 0; i < 4; i++) this.powerupPips.push(this.makePip(i));
+    this.shieldPip = this.makePip(0);
+
+    // MuteButton's constructor wires itself into the scene; we don't need
+    // to keep a handle (the redraw callback runs from its own pointer listener).
+    void new MuteButton(this);
+    this.buildSettingsButton();
+    this.settingsMenu = new SettingsMenu(this);
+
+    // Browsers refuse to start AudioContext until a user gesture. We listen
+    // game-wide for the first pointer/key event and call resume(); after
+    // that, sfx + music can play freely.
+    const unlock = (): void => {
+      AudioBus.resume();
+      this.input.off('pointerdown', unlock);
+      const keyboard = this.input.keyboard;
+      if (keyboard) keyboard.off('keydown', unlock);
+    };
+    this.input.on('pointerdown', unlock);
+    const keyboard = this.input.keyboard;
+    if (keyboard) keyboard.on('keydown', unlock);
+  }
+
+  // Gear icon to the left of the mute button. Opens the SettingsMenu modal.
+  private buildSettingsButton(): void {
+    const size = 22;
+    const padding = 12;
+    const x = this.scale.width - padding - size - 8 - size;
+    const y = padding;
+    const g = this.add.graphics().setScrollFactor(0).setDepth(2300);
+    g.setPosition(x + size / 2, y + size / 2);
+    g.fillStyle(0x101820, 0.85);
+    g.fillCircle(0, 0, size / 2);
+    g.lineStyle(1.5, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, size / 2);
+    // Cog teeth - 8 small lines radiating outward.
+    g.lineStyle(2, 0xffffff, 0.95);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const inner = size / 2 - 5;
+      const outer = size / 2 + 2;
+      g.lineBetween(Math.cos(a) * inner, Math.sin(a) * inner, Math.cos(a) * outer, Math.sin(a) * outer);
+    }
+    g.lineStyle(1.5, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, 4);
+    // The graphics object isn't held - it lives on the scene's display list
+    // for the rest of the session. The hit zone owns the click handler.
+    void g;
+
+    const hit = this.add
+      .zone(x, y, size, size)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2300)
+      .setInteractive({ useHandCursor: true });
+    hit.on('pointerdown', () => {
+      if (this.settingsMenu.isOpen()) this.settingsMenu.close();
+      else this.settingsMenu.open();
+    });
+  }
+
+  private makePip(index: number): PowerupPip {
+    const x = PIP_STRIP_X + index * (PIP_W + PIP_GAP);
+    const bg = this.add
+      .rectangle(x, PIP_STRIP_Y, PIP_W, PIP_H, 0x0a1014, 0.9)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.55)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+    const fill = this.add
+      .rectangle(x + 1, PIP_STRIP_Y + PIP_H - 4, PIP_W - 2, 3, 0xffffff, 1)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2001)
+      .setVisible(false);
+    const text = this.add
+      .text(x + PIP_W / 2, PIP_STRIP_Y + (PIP_H - 4) / 2, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2002)
+      .setVisible(false);
+    return { bg, fill, text };
   }
 
   override update(time: number): void {
@@ -246,32 +364,93 @@ export class HUDScene extends Phaser.Scene {
 
     const greed = raid.getGreedInfo();
     if (greed.active && greed.mult > 1.0) {
-      this.greedText.setText(`${Strings.greedLabel}  x${greed.mult.toFixed(2)}`);
+      this.greedText.setText(`${Strings.greedLabel}  x${greed.mult.toFixed(2)}`).setVisible(true);
     } else {
-      this.greedText.setText('');
+      this.greedText.setText('').setVisible(false);
     }
 
     const ext = raid.getExtractionInfo();
     if (ext.open) {
       this.extractBanner.setText(Strings.extractionOpened);
-      this.drawWaypoint(raid, ext.padX, ext.padY);
     } else {
       this.extractBanner.setText('');
+    }
+
+    // Off-screen waypoint per §7.8 - target is owned by RaidScene so the FTUE
+    // tutorial can swap it between an active power-up and the extraction pad.
+    const wp = raid.getWaypointTarget();
+    if (wp) {
+      const color = wp.kind === 'powerup' ? Balance.colors.reward : Balance.colors.extraction;
+      this.drawWaypoint(raid, wp.x, wp.y, color);
+    } else {
       this.waypoint.setVisible(false);
     }
+
+    this.renderPowerupStrip(raid);
+  }
+
+  private renderPowerupStrip(raid: RaidScene): void {
+    const active = raid.getActivePowerups();
+    const shieldCharges = raid.getShieldCharges();
+
+    // Timed pips
+    for (let i = 0; i < this.powerupPips.length; i++) {
+      const pip = this.powerupPips[i];
+      const eff = active[i];
+      if (!eff) {
+        pip.bg.setVisible(false);
+        pip.fill.setVisible(false);
+        pip.text.setVisible(false);
+        continue;
+      }
+      pip.bg.setVisible(true).setStrokeStyle(1, eff.color, 0.9);
+      pip.fill.setVisible(true).setFillStyle(eff.color, 1);
+      const ratio = Math.max(0, Math.min(1, eff.remaining / Math.max(0.001, eff.total)));
+      pip.fill.setSize(Math.max(0, (PIP_W - 2) * ratio), 3);
+      pip.text.setVisible(true).setText(`${eff.iconText}  ${eff.remaining.toFixed(1)}s`);
+    }
+
+    // Shield pip - drawn to the right of any active timed effects.
+    if (shieldCharges > 0) {
+      const slotIdx = active.length;
+      const sx = PIP_STRIP_X + slotIdx * (PIP_W + PIP_GAP);
+      this.shieldPip.bg.setPosition(sx, PIP_STRIP_Y).setVisible(true).setStrokeStyle(1, 0xffffff, 0.9);
+      this.shieldPip.fill.setPosition(sx + 1, PIP_STRIP_Y + PIP_H - 4).setVisible(true).setFillStyle(0xffffff, 1);
+      this.shieldPip.fill.setSize(PIP_W - 2, 3);
+      this.shieldPip.text
+        .setPosition(sx + PIP_W / 2, PIP_STRIP_Y + (PIP_H - 4) / 2)
+        .setVisible(true)
+        .setText(`SHLD x${shieldCharges}`);
+    } else {
+      this.shieldPip.bg.setVisible(false);
+      this.shieldPip.fill.setVisible(false);
+      this.shieldPip.text.setVisible(false);
+    }
+  }
+
+  private hideAllPips(): void {
+    for (const pip of this.powerupPips) {
+      pip.bg.setVisible(false);
+      pip.fill.setVisible(false);
+      pip.text.setVisible(false);
+    }
+    this.shieldPip.bg.setVisible(false);
+    this.shieldPip.fill.setVisible(false);
+    this.shieldPip.text.setVisible(false);
   }
 
   private renderFactory(factory: FactoryScene): void {
     // Hide raid-only widgets.
     this.timerText.setText('');
     this.comboText.setText('');
-    this.greedText.setText('');
+    this.greedText.setText('').setVisible(false);
     this.extractBanner.setText('');
     this.hpBarBg.setVisible(false);
     this.hpBarFill.setVisible(false);
     this.hpText.setText('');
     this.hpText.setVisible(false);
     this.waypoint.setVisible(false);
+    this.hideAllPips();
 
     const wallet = Economy.getWallet();
     this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
@@ -294,7 +473,7 @@ export class HUDScene extends Phaser.Scene {
   private clearRaidHud(): void {
     this.timerText.setText('');
     this.comboText.setText('');
-    this.greedText.setText('');
+    this.greedText.setText('').setVisible(false);
     this.extractBanner.setText('');
     this.scrapText.setText('');
     this.coresText.setText('');
@@ -305,9 +484,10 @@ export class HUDScene extends Phaser.Scene {
     this.waypoint.setVisible(false);
     if (this.spmText) this.spmText.setVisible(false);
     if (this.deployText) this.deployText.setVisible(false);
+    if (this.shieldPip) this.hideAllPips();
   }
 
-  private drawWaypoint(raid: RaidScene, padX: number, padY: number): void {
+  private drawWaypoint(raid: RaidScene, padX: number, padY: number, color: number = Balance.colors.extraction): void {
     const cam = raid.cameras.main;
     const viewW = this.scale.width;
     const viewH = this.scale.height;
@@ -350,7 +530,7 @@ export class HUDScene extends Phaser.Scene {
     ];
     this.waypoint.clear();
     this.waypoint.setVisible(true);
-    this.waypoint.fillStyle(Balance.colors.extraction, 1);
+    this.waypoint.fillStyle(color, 1);
     this.waypoint.lineStyle(2, 0xffffff, 0.9);
     this.waypoint.beginPath();
     for (let i = 0; i < localPts.length; i++) {

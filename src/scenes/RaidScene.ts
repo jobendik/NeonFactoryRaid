@@ -3,22 +3,51 @@ import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { Pickup, type PickupType } from '../entities/Pickup';
 import { Bullet } from '../entities/Bullet';
+import { Powerup } from '../entities/Powerup';
 import { InputSystem } from '../systems/InputSystem';
 import { WaveDirector } from '../systems/WaveDirector';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { ParticleEffects } from '../systems/ParticleEffects';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
 import { GreedSystem } from '../systems/GreedSystem';
+import { PowerupSystem } from '../systems/PowerupSystem';
 import { Economy } from '../systems/EconomySystem';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
+import { Strings } from '../config/Strings';
 import { EnemyDefs } from '../config/EnemyDefs';
+import { PowerupDefs } from '../config/PowerupDefs';
 import { bus, Events } from '../core/EventBus';
-import { playRisingChord } from '../platform/Audio';
 import { saveSystem } from '../platform/SaveSystem';
-import type { RaidEndState, RaidEndPayload } from '../core/types';
+import { MusicEngine } from '../audio/music';
+import {
+  sfxCore,
+  sfxScrap,
+  sfxPowerup,
+  sfxEnemyHit,
+  sfxEnemyDeath,
+  sfxEnemyShoot,
+  sfxExtractionOpen,
+  sfxExtractionTick,
+  sfxExtractionSuccess,
+  sfxRaidFailed,
+  sfxTimerTick,
+  sfxNuke,
+  sfxMagnetBurst,
+  sfxLaserOverdrive,
+  sfxFreezePulse,
+  sfxTimeBonus,
+} from '../audio/sfx';
+import type {
+  RaidEndState,
+  RaidEndPayload,
+  RaidInitData,
+  WaypointTarget,
+} from '../core/types';
 
 type RaidPhase = 'active' | 'extracting' | 'ended';
+
+type TutorialCaptionKey = 'move' | 'dash' | 'powerup' | 'extract';
 
 // RaidScene drives the raid lifecycle. Through M6 it owns:
 //   - the player, enemies, pickups, bullets pools
@@ -48,12 +77,42 @@ export class RaidScene extends Phaser.Scene {
   private activePopups = 0;
   private phase: RaidPhase = 'active';
   private extractTimer = 0;
+  private isTutorial = false;
+  private elapsed = 0;
+  private captionDoneIdx = -1;
+  private tutorialBanner: Phaser.GameObjects.Text | null = null;
+  private powerups!: Phaser.GameObjects.Group;
+  private powerupSystem!: PowerupSystem;
+  // §7.3 visual escalation: a red vignette overlay (HUD-relative) whose
+  // alpha matches the current greed step's vignette factor; an extra cool
+  // tint that fades in at the deep-end (x3) step.
+  private greedVignette: Phaser.GameObjects.Graphics | null = null;
+  private deepEndTint: Phaser.GameObjects.Rectangle | null = null;
+  // Hit-stop: when > 0 we skip update() side effects for a few frames so
+  // the kill of a Tank / elite has weight.
+  private hitStopTimer = 0;
+  // Near-miss tracking (M14). We remember which enemies were close-and-active
+  // during the most recent dash so each near-miss is awarded once per dash.
+  private nearMissAwarded = new Set<Enemy>();
+  // Tracks the integer second of the previous frame so the timer-tick SFX
+  // fires exactly once per second during the final 10s rather than every
+  // frame. Set to -1 on raid start to skip the boot frame.
+  private lastTickSecond = -1;
+  // Tracks whether we already played extraction-tick this filling window.
+  private extractionTickElapsed = 0;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
-  private onExtractionOpened = (): void => this.greed.start();
+  private onExtractionOpened = (): void => {
+    this.greed.start();
+    sfxExtractionOpen();
+  };
 
   constructor() {
     super({ key: 'RaidScene' });
+  }
+
+  init(data?: RaidInitData): void {
+    this.isTutorial = !!data?.tutorial;
   }
 
   create(): void {
@@ -91,15 +150,32 @@ export class RaidScene extends Phaser.Scene {
       maxSize: Balance.shooter.bulletMaxOnField,
       runChildUpdate: false,
     });
+    this.powerups = this.add.group({
+      classType: Powerup,
+      maxSize: Balance.powerups.maxOnField,
+      runChildUpdate: false,
+    });
     this.physics.add.overlap(this.player, this.pickups, this.onPickupOverlap, undefined, this);
     this.physics.add.overlap(this.player, this.enemies, this.onPlayerEnemyOverlap, undefined, this);
     this.physics.add.overlap(this.player, this.bullets, this.onPlayerBulletOverlap, undefined, this);
+    this.physics.add.overlap(this.player, this.powerups, this.onPowerupOverlap, undefined, this);
 
     this.waveDirector = new WaveDirector(this.enemies, () => ({
       x: this.player.x,
       y: this.player.y,
     }));
-    this.waveDirector.start();
+    const raidDuration = this.isTutorial
+      ? Balance.raid.tutorialDuration
+      : Balance.raid.normalDuration;
+    if (this.isTutorial) {
+      this.waveDirector.start({
+        spawnRateMult: Balance.tutorial.enemySpawnRateMult,
+        enemyHpMult: Balance.tutorial.enemyHpMult,
+        raidDuration,
+      });
+    } else {
+      this.waveDirector.start({ raidDuration });
+    }
 
     this.particles = new ParticleEffects(this);
     this.weapons = new WeaponSystem(
@@ -108,29 +184,57 @@ export class RaidScene extends Phaser.Scene {
       () => this.enemies.getChildren(),
     );
     this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
+    if (this.isTutorial) this.weapons.setDamageMult(Balance.tutorial.playerDamageMult);
 
     this.extraction = new ExtractionSystem(
       this,
       Balance.extraction.padX,
       Balance.extraction.padY,
       Balance.extraction.padRadius,
-      Balance.raid.extractionOpenTime,
+      this.isTutorial ? Balance.raid.tutorialExtractionOpenTime : Balance.raid.extractionOpenTime,
     );
 
     this.greed = new GreedSystem();
+
+    this.powerupSystem = new PowerupSystem(
+      this,
+      this.powerups,
+      () => ({ x: this.player.x, y: this.player.y }),
+      { tutorial: this.isTutorial },
+      {
+        signalNuke: () => this.activateSignalNuke(),
+        timeBonus: () => this.activateTimeBonus(),
+        shieldGrant: () => this.player.addShieldCharge(),
+      },
+    );
+    this.powerupSystem.start();
 
     this.runLoot.scrap = 0;
     this.runLoot.cores = 0;
     this.combo = 1.0;
     this.comboGrace = 0;
-    this.timeRemaining = Balance.raid.normalDuration;
+    this.timeRemaining = raidDuration;
     this.phase = 'active';
     this.extractTimer = 0;
+    this.elapsed = 0;
+    this.captionDoneIdx = -1;
+
+    if (this.isTutorial) {
+      this.player.applyHpMult(Balance.tutorial.playerHpMult);
+      this.player.setHpFloor(Balance.tutorial.safetyNetHpFloor);
+      this.spawnInitialScrapPile();
+      this.spawnTutorialBanner();
+    }
+
+    this.hitStopTimer = 0;
+    this.nearMissAwarded.clear();
+    this.buildGreedOverlays();
 
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
 
+    MusicEngine.startRaid();
     bus.emit(Events.RAID_STARTED);
   }
 
@@ -144,47 +248,192 @@ export class RaidScene extends Phaser.Scene {
       return;
     }
 
+    if (this.hitStopTimer > 0) {
+      // Hit-stop "weight pause": the scene stays awake (HUD still ticks via
+      // its own update) but raid simulation halts for a frame or two. We
+      // still tick the timer so timeRemaining stays honest.
+      this.hitStopTimer -= dt;
+      return;
+    }
+
     this.timeRemaining = Math.max(0, this.timeRemaining - dt);
+    this.elapsed += dt;
+
+    const greedStep = this.greed.getStep();
+    this.waveDirector.setGreedStep(greedStep);
+    this.updateGreedVisuals(greedStep);
 
     const frame = this.inputSystem.getInput();
     this.player.update(dt, frame);
+    this.player.syncShieldAura();
     this.waveDirector.update(dt);
     this.extraction.update(dt, this.player.x, this.player.y);
     this.greed.update(dt);
+    this.powerupSystem.update(dt);
 
+    if (this.isTutorial) this.tickTutorial(dt);
+
+    // Push current power-up state into the weapon. Cheap to do every frame -
+    // the setters are just field writes.
+    this.weapons.setFireRateMult(this.powerupSystem.getFireRateMult());
+    this.weapons.setTargetsPerShot(this.powerupSystem.getTargetsPerShot());
+
+    const frozen = this.powerupSystem.isFreezeActive();
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
       if (!e.active) continue;
-      const r = e.tick(dt, this.player.x, this.player.y);
+      // Visual cue while Freeze Pulse is up; restored to white on thaw.
+      if (frozen) e.setTint(Balance.powerups.freezeTint);
+      else e.clearTint();
+      const r = e.tick(dt, this.player.x, this.player.y, frozen);
       if (r.fired) this.spawnEnemyBullet(r.fired.fromX, r.fired.fromY, r.fired.dirX, r.fired.dirY);
     }
 
-    const hit = this.weapons.update(dt);
-    if (hit) {
-      const targetX = hit.target.x;
-      const targetY = hit.target.y;
-      const killed = hit.target.hit(hit.damage);
-      this.showPopup(targetX, targetY - 16, `-${Math.round(hit.damage)}`, '#ffffff');
-      if (killed) {
-        const dead = hit.target;
-        this.particles.enemyDeath(dead.kind, dead.x, dead.y);
-        this.spawnDrops(dead);
-        dead.kill();
-        this.onEnemyKilled();
-      }
-    }
+    const hits = this.weapons.update(dt);
+    for (const hit of hits) this.processHit(hit.target, hit.damage, this.player.x, this.player.y);
 
-    const magnetRadius = UpgradeEffects.magnetRadius();
+    // Magnet radius: base × upgrade × Magnet Burst (when active).
+    const magnetRadius = UpgradeEffects.magnetRadius() * this.powerupSystem.getMagnetMult();
     for (const child of this.pickups.getChildren()) {
       const p = child as Pickup;
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
+    // Powerups magnetize on the same radius but with a separate, more
+    // forgiving pull profile (Powerup.updateMagnet's internal speeds).
+    for (const child of this.powerups.getChildren()) {
+      const p = child as Powerup;
+      if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
+    }
+
     this.tickBullets(dt);
     this.tickCombo(dt);
+    this.tickTimerSfx();
+    this.tickExtractionSfx(dt);
+    this.tickAdaptiveMusic();
+    this.tickNearMiss();
 
     if (this.timeRemaining <= 0) {
       this.requestEnd('collapsed');
+    }
+  }
+
+  // Metronome click during the final 10s of a raid. Fires once per integer
+  // second so we don't carpet-bomb the SFX bus at frame rate.
+  private tickTimerSfx(): void {
+    if (this.timeRemaining > 10) {
+      this.lastTickSecond = -1;
+      return;
+    }
+    const sec = Math.ceil(this.timeRemaining);
+    if (sec !== this.lastTickSecond && sec >= 0) {
+      this.lastTickSecond = sec;
+      sfxTimerTick();
+    }
+  }
+
+  // Quiet pulse while the player holds the extraction pad (fill > 0).
+  // Fires every 0.5s and stops when they step off or extract.
+  private tickExtractionSfx(dt: number): void {
+    const ext = this.extraction.getFill();
+    if (ext <= 0 || !this.extraction.isOpen()) {
+      this.extractionTickElapsed = 0;
+      return;
+    }
+    this.extractionTickElapsed += dt;
+    if (this.extractionTickElapsed >= 0.5) {
+      this.extractionTickElapsed = 0;
+      sfxExtractionTick();
+    }
+  }
+
+  // Push tension / danger intensity into the music engine per §20.4 rules:
+  //   tension: HP <= 50% OR Greed >= 1.5
+  //   danger:  HP <= 20% OR active enemies >= 10 OR Greed >= 2.0
+  private tickAdaptiveMusic(): void {
+    const hpRatio = this.player.maxHp > 0 ? this.player.hp / this.player.maxHp : 1;
+    const greedMult = this.greed.getMultiplier();
+    let enemyCount = 0;
+    for (const c of this.enemies.getChildren()) if (c.active) enemyCount++;
+    const tension = hpRatio <= 0.5 || greedMult >= 1.5 ? 1 : 0;
+    const danger = hpRatio <= 0.2 || enemyCount >= 10 || greedMult >= 2.0 ? 1 : 0;
+    MusicEngine.setIntensity(tension, danger);
+  }
+
+  // Near-miss (M14): any enemy passes within nearMissRadius during a dash
+  // earns +N Scrap and a small popup. Each enemy can only score once per
+  // dash; the set clears every frame the player isn't dashing so a brushing
+  // pass-through during sustained chase doesn't endlessly fire.
+  private tickNearMiss(): void {
+    if (!this.player.isDashing()) {
+      this.nearMissAwarded.clear();
+      return;
+    }
+    const r2 = Balance.raid.nearMissRadius * Balance.raid.nearMissRadius;
+    const px = this.player.x;
+    const py = this.player.y;
+    for (const c of this.enemies.getChildren()) {
+      const e = c as Enemy;
+      if (!e.active || this.nearMissAwarded.has(e)) continue;
+      const dx = e.x - px;
+      const dy = e.y - py;
+      if (dx * dx + dy * dy <= r2) {
+        this.nearMissAwarded.add(e);
+        this.runLoot.scrap += Balance.raid.nearMissReward;
+        this.showPopup(px, py - 38, 'NEAR MISS', '#ffd75a');
+      }
+    }
+  }
+
+  // Build the M14 greed-step visuals (HUD-relative). Both overlays render at
+  // depth above gameplay but below HUDScene's UI strip.
+  private buildGreedOverlays(): void {
+    this.greedVignette?.destroy();
+    this.deepEndTint?.destroy();
+    this.greedVignette = this.add.graphics().setScrollFactor(0).setDepth(1800);
+    this.greedVignette.setAlpha(0);
+    this.deepEndTint = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x0a1428, 0.22)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(1801)
+      .setAlpha(0);
+    this.drawGreedVignette();
+  }
+
+  private drawGreedVignette(): void {
+    const g = this.greedVignette;
+    if (!g) return;
+    g.clear();
+    const w = this.scale.width;
+    const h = this.scale.height;
+    // Layer a series of inset rectangles in increasing alpha to fake a
+    // radial vignette. Cheap, and enough for the "danger frame" feel.
+    const color = Balance.colors.danger;
+    const bands = 6;
+    for (let i = 0; i < bands; i++) {
+      const inset = (i / bands) * Math.min(w, h) * 0.45;
+      g.lineStyle(Math.max(2, (1 - i / bands) * 22), color, 0.18);
+      g.strokeRect(inset, inset, w - inset * 2, h - inset * 2);
+    }
+  }
+
+  // Update the §7.3 visual escalation overlays for the current greed step.
+  private updateGreedVisuals(step: number): void {
+    const esc = Balance.raid.greedEscalation[Math.max(0, Math.min(Balance.raid.greedEscalation.length - 1, step))];
+    const g = this.greedVignette;
+    if (g) {
+      // Mild sine pulse on top of the step-base intensity so the danger
+      // frame breathes rather than sits flat.
+      const breathe = (Math.sin(this.elapsed * 3.4) + 1) / 2;
+      const alpha = Math.max(0, Math.min(1, esc.vignette * (0.85 + breathe * 0.3)));
+      g.setAlpha(alpha);
+    }
+    if (this.deepEndTint) {
+      const want = step >= Balance.raid.deepEndTintAt ? 0.42 : 0;
+      // Cheap lerp toward target so the tint glides in rather than snapping.
+      const cur = this.deepEndTint.alpha;
+      this.deepEndTint.setAlpha(cur + (want - cur) * 0.05);
     }
   }
 
@@ -197,6 +446,17 @@ export class RaidScene extends Phaser.Scene {
     this.particles.destroy();
     this.extraction.destroy();
     this.greed.stop();
+    this.powerupSystem.stop();
+    MusicEngine.stop();
+    if (this.tutorialBanner) {
+      this.tutorialBanner.destroy();
+      this.tutorialBanner = null;
+    }
+    this.greedVignette?.destroy();
+    this.greedVignette = null;
+    this.deepEndTint?.destroy();
+    this.deepEndTint = null;
+    this.nearMissAwarded.clear();
     bus.emit(Events.RAID_ENDED);
   }
 
@@ -252,6 +512,16 @@ export class RaidScene extends Phaser.Scene {
         `+${value}`,
         type === 'scrap' ? '#22f6ff' : '#ffd75a',
       );
+    }
+    if (type === 'core') {
+      sfxCore();
+      const save = saveSystem.get();
+      if (!save.firstCoreCollected) {
+        save.firstCoreCollected = true;
+        save.ftueUnlocks.luckUpgrade = true;
+      }
+    } else {
+      sfxScrap();
     }
     p.kill();
     bus.emit(Events.PICKUP_COLLECTED, type, value);
@@ -321,6 +591,7 @@ export class RaidScene extends Phaser.Scene {
     const b = this.bullets.get(fromX, fromY) as Bullet | null;
     if (!b) return;
     b.fire(fromX, fromY, dirX, dirY, Balance.shooter.bulletSpeed, Balance.shooter.bulletDamage);
+    sfxEnemyShoot();
   }
 
   private tickBullets(dt: number): void {
@@ -399,7 +670,8 @@ export class RaidScene extends Phaser.Scene {
 
     // Brief frame freeze + radial light blast at the player.
     this.spawnRadialFlash();
-    playRisingChord();
+    // §20.3 layered extraction success - boom + sweep + sparkle + chord.
+    sfxExtractionSuccess();
   }
 
   private updateExtractionMoment(dt: number): void {
@@ -432,6 +704,8 @@ export class RaidScene extends Phaser.Scene {
     this.extraction.finish();
     this.waveDirector.stop();
     this.greed.stop();
+    MusicEngine.stop();
+    if (state === 'failed' || state === 'collapsed') sfxRaidFailed();
 
     // Greed multiplies banked loot on successful extract. Death and collapse
     // both forfeit 50% of unbanked loot per the prototype rule. Combo is already
@@ -451,6 +725,14 @@ export class RaidScene extends Phaser.Scene {
     }
 
     Economy.bankLoot(scrap, cores);
+    if (cores > 0) {
+      const save = saveSystem.get();
+      if (!save.firstCoreCollected) {
+        save.firstCoreCollected = true;
+        save.ftueUnlocks.luckUpgrade = true;
+      }
+    }
+    this.updateFtueProgress(state);
     // Persist immediately on raid-end so the player can't lose loot to a tab
     // close on the summary screen. The 10s autosave and the RAID_ENDED handler
     // both still fire later; this is the belt-and-suspenders save.
@@ -461,6 +743,7 @@ export class RaidScene extends Phaser.Scene {
       loot: { scrap, cores },
       greedMult,
       penaltyApplied,
+      tutorial: this.isTutorial,
     };
 
     // Small delay so the moment's tail visuals finish before the summary appears.
@@ -468,6 +751,293 @@ export class RaidScene extends Phaser.Scene {
       this.scene.launch('SummaryScene', payload);
       this.scene.pause();
     });
+  }
+
+  // Centralizes the §5.3 progressive-reveal rules. Called once per raid-end,
+  // before the SummaryScene reads the save. The §5.3 table puts a few unlocks
+  // on the "X raids completed" axis; raidsCompleted counts the tutorial as
+  // raid #1, so the magnet/drone/damage gates compare against >=2/>=3/>=4.
+  private updateFtueProgress(state: RaidEndState): void {
+    const save = saveSystem.get();
+    save.raidsCompleted += 1;
+    if (state === 'extracted') save.successfulExtracts += 1;
+
+    if (this.isTutorial && state === 'extracted') {
+      save.tutorialDone = true;
+      save.ftueUnlocks.dailyClaim = true;
+    }
+
+    // Real-raid count (post-tutorial). Reveal milestones key off this number,
+    // not raidsCompleted, so a player who never finished the tutorial doesn't
+    // accidentally unlock real-raid gates by failing it.
+    const realRaids = save.tutorialDone ? Math.max(0, save.raidsCompleted - 1) : 0;
+    if (realRaids >= 1) save.ftueUnlocks.magnetUpgrade = true;
+    if (realRaids >= 2) save.ftueUnlocks.droneUpgrade = true;
+    if (realRaids >= 3) save.ftueUnlocks.damageUpgrade = true;
+    if (realRaids >= 5) save.ftueUnlocks.factoryBoost = true;
+  }
+
+  // ---- tutorial-only helpers ----
+
+  // Tutorial loop just drives caption timings now - power-up spawns and
+  // effects are handled by PowerupSystem in tutorial mode (scripted at
+  // §5.4 timestamps).
+  private tickTutorial(_dt: number): void {
+    const timings = Balance.tutorial.captionTimings;
+    for (let i = this.captionDoneIdx + 1; i < timings.length; i++) {
+      if (this.elapsed >= timings[i].t) {
+        this.captionDoneIdx = i;
+        this.showTutorialCaption(timings[i].key);
+      } else break;
+    }
+  }
+
+  private showTutorialCaption(key: TutorialCaptionKey): void {
+    const text =
+      key === 'move'
+        ? Strings.ftueMove
+        : key === 'dash'
+          ? Strings.ftueDash
+          : key === 'powerup'
+            ? Strings.ftuePowerup
+            : Strings.ftueExtract;
+    const t = this.add.text(this.scale.width / 2, 220, text, {
+      fontFamily: 'monospace',
+      fontSize: '64px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 6,
+    });
+    t.setOrigin(0.5).setScrollFactor(0).setDepth(2200).setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      duration: Balance.tutorial.captionFadeMs,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(Balance.tutorial.captionHoldSec * 1000, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: Balance.tutorial.captionFadeMs,
+        onComplete: () => t.destroy(),
+      });
+    });
+  }
+
+  private spawnTutorialBanner(): void {
+    const banner = this.add.text(this.scale.width / 2, 6, Strings.ftueTutorialBanner, {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#888888',
+      stroke: '#000000',
+      strokeThickness: 2,
+    });
+    banner.setOrigin(0.5, 0).setScrollFactor(0).setDepth(2050);
+    this.tutorialBanner = banner;
+  }
+
+  private spawnInitialScrapPile(): void {
+    // §5.2 0.0s: "Big arrow points to nearby scrap pile" - we spawn a small
+    // visible cluster right next to the player so the player picks it up within
+    // the first 2 seconds without needing to chase.
+    const offset = Balance.tutorial.initialScrapPileOffset;
+    for (let i = 0; i < Balance.tutorial.initialScrapPileCount; i++) {
+      const angle = (i / Balance.tutorial.initialScrapPileCount) * Math.PI * 2;
+      const x = this.player.x + Math.cos(angle) * offset;
+      const y = this.player.y + Math.sin(angle) * offset;
+      const p = this.pickups.get(x, y) as Pickup | null;
+      if (p) p.spawn(x, y, 'scrap', 1);
+    }
+  }
+
+  // ---- power-up overlap + chain + instant handlers ----
+
+  private onPowerupOverlap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_player, powerupObj) => {
+    const pup = powerupObj as Powerup;
+    if (!pup.active) return;
+    const kind = pup.kind;
+    const def = PowerupDefs[kind];
+    pup.kill();
+    this.powerupSystem.activate(kind);
+    // §13: every power-up surfaces its label as a popup so the player learns
+    // the names without a tooltip.
+    this.showPopup(this.player.x, this.player.y - 24, def.label, '#ffd75a');
+    sfxPowerup();
+    // Distinctive per-kind cue plays on top of the generic chirp. Shield uses
+    // its own SFX inside Player.addShieldCharge; nuke/timeBonus are routed via
+    // their activation handlers.
+    if (kind === 'magnetBurst') sfxMagnetBurst();
+    else if (kind === 'laserOverdrive') sfxLaserOverdrive();
+    else if (kind === 'freezePulse') sfxFreezePulse();
+    bus.emit(Events.POWERUP_COLLECTED, kind);
+  };
+
+  // processHit centralizes the per-hit damage path: render -damage popup, run
+  // hit() / kill paths, then if Drone Swarm is up, chain to N more enemies
+  // within the chain radius. M14 layers in knockback (push enemies away
+  // from the hit source) and hit-stop on Tank / elite kills.
+  private processHit(target: Enemy, damage: number, sourceX: number, sourceY: number): void {
+    if (!target.active) return;
+    const tx = target.x;
+    const ty = target.y;
+    target.applyKnockback(sourceX, sourceY);
+    const killed = target.hit(damage);
+    this.showDamagePopup(tx, ty - 16, damage);
+    if (killed) {
+      this.particles.enemyDeath(target.kind, tx, ty);
+      this.spawnDrops(target);
+      const wasTank = target.kind === 'tank';
+      const wasElite = target.kind === 'elite';
+      target.kill();
+      this.onEnemyKilled();
+      sfxEnemyDeath();
+      if (wasElite) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopEliteSec);
+      else if (wasTank) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopTankSec);
+    } else {
+      sfxEnemyHit();
+    }
+
+    // Chain (Drone Swarm). Each chain hop deals the same damage; chain count
+    // is capped per shot. We chain from the last hit location, not the player,
+    // so the tracer visually walks across the field.
+    const chains = this.powerupSystem.getChainCount();
+    if (chains <= 0) return;
+    let fromX = tx;
+    let fromY = ty;
+    const visited = new Set<Enemy>([target]);
+    for (let i = 0; i < chains; i++) {
+      const next = this.findChainTarget(fromX, fromY, visited);
+      if (!next) break;
+      visited.add(next);
+      this.weapons.drawTracer(fromX, fromY, next.x, next.y, PowerupDefs.droneSwarm.color);
+      const nextX = next.x;
+      const nextY = next.y;
+      next.applyKnockback(fromX, fromY);
+      const nextKilled = next.hit(damage);
+      this.showDamagePopup(nextX, nextY - 16, damage, '#a76cff');
+      if (nextKilled) {
+        this.particles.enemyDeath(next.kind, nextX, nextY);
+        this.spawnDrops(next);
+        next.kill();
+        this.onEnemyKilled();
+      }
+      fromX = nextX;
+      fromY = nextY;
+    }
+  }
+
+  // §19.4 damage popups: combo >= 2 reads bigger + brighter so high-combo
+  // kills feel punchy. Shared with normal and chain hits.
+  private showDamagePopup(x: number, y: number, damage: number, baseColor: string = '#ffffff'): void {
+    const big = this.combo >= 2.0;
+    const fontSize = big ? '20px' : '14px';
+    const color = big ? '#ffd75a' : baseColor;
+    if (this.activePopups >= Balance.performance.maxPopups) return;
+    this.activePopups++;
+    const t = this.add.text(x, y, `-${Math.round(damage)}`, {
+      fontFamily: 'monospace',
+      fontSize,
+      color,
+      stroke: '#000000',
+      strokeThickness: big ? 4 : 3,
+    });
+    t.setOrigin(0.5).setDepth(100);
+    this.tweens.add({
+      targets: t,
+      y: y - Balance.ui.popupRiseDist * (big ? 1.4 : 1),
+      alpha: 0,
+      duration: Balance.ui.popupDurationMs,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        t.destroy();
+        this.activePopups--;
+      },
+    });
+  }
+
+  private findChainTarget(fromX: number, fromY: number, visited: Set<Enemy>): Enemy | null {
+    const radius2 = Balance.powerups.droneSwarmChainRadius * Balance.powerups.droneSwarmChainRadius;
+    let best: Enemy | null = null;
+    let bestD2 = radius2;
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active || visited.has(e)) continue;
+      const dx = e.x - fromX;
+      const dy = e.y - fromY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  // Signal Nuke (§13 "kills all on-screen enemies"). We use a generous radius
+  // around the player rather than reading the camera so a player at the edge
+  // of the arena still clears the wave they can see.
+  private activateSignalNuke(): void {
+    const r2 = Balance.powerups.signalNukeRadius * Balance.powerups.signalNukeRadius;
+    this.cameras.main.shake(180, 0.012);
+    sfxNuke();
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active) continue;
+      const dx = e.x - this.player.x;
+      const dy = e.y - this.player.y;
+      if (dx * dx + dy * dy > r2) continue;
+      this.particles.enemyDeath(e.kind, e.x, e.y);
+      this.spawnDrops(e);
+      e.kill();
+      this.onEnemyKilled();
+    }
+    // Also clear in-flight enemy bullets so the nuke feels totally clean.
+    for (const child of this.bullets.getChildren()) {
+      const b = child as Bullet;
+      if (b.active) b.kill();
+    }
+  }
+
+  // +15 Seconds: just extends the raid timer. The HUD timer rounds up so the
+  // bump is visible immediately.
+  private activateTimeBonus(): void {
+    this.timeRemaining += Balance.powerups.timeBonusSeconds;
+    sfxTimeBonus();
+  }
+
+  // ---- waypoint target (consumed by HUDScene) ----
+
+  // Priority order: an open extraction pad always wins. Before extraction
+  // opens, the tutorial directs the off-screen arrow at the live power-up
+  // (if any). Non-tutorial raids return null until extraction opens.
+  getWaypointTarget(): WaypointTarget | null {
+    if (this.extraction.isOpen()) {
+      const pos = this.extraction.getPadPosition();
+      return { x: pos.x, y: pos.y, kind: 'extract' };
+    }
+    if (this.isTutorial) {
+      for (const child of this.powerups.getChildren()) {
+        const p = child as Powerup;
+        if (p.active) return { x: p.x, y: p.y, kind: 'powerup' };
+      }
+    }
+    return null;
+  }
+
+  isTutorialRaid(): boolean {
+    return this.isTutorial;
+  }
+
+  // Read by HUDScene to render the active-power-up strip (timer-bar pips).
+  getActivePowerups(): ReturnType<PowerupSystem['getActiveEffectsView']> {
+    return this.powerupSystem.getActiveEffectsView();
+  }
+
+  // Shield Bubble (§13): HUD renders a small pip when the player holds at
+  // least one charge. The charge isn't timed - it lives on the Player.
+  getShieldCharges(): number {
+    return this.player.shieldCharges;
   }
 
   private spawnRadialFlash(): void {

@@ -14,26 +14,58 @@ export interface PlayerPositionProvider {
   (): { x: number; y: number };
 }
 
+export interface WaveDirectorOpts {
+  // Scales both the simultaneous-cap and the spawn cadence. Tutorial passes 0.4
+  // per blueprint §5.4 ("enemy count: 40% normal").
+  spawnRateMult?: number;
+  // Multiplier applied to each enemy's hp on spawn. Tutorial passes 0.5.
+  enemyHpMult?: number;
+  // The reference duration for the intensity ramp. Tutorial passes 45 so
+  // intensity reaches 1.0 at the end of a 45s tutorial instead of pretending
+  // the raid is 75s long.
+  raidDuration?: number;
+}
+
 export class WaveDirector {
   private group: Phaser.GameObjects.Group;
   private getPlayerPos: PlayerPositionProvider;
   private spawnTimer = 0;
   private elapsed = 0;
   private active = false;
+  private spawnRateMult = 1;
+  private enemyHpMult = 1;
+  private raidDuration: number = Balance.raid.normalDuration;
+  // M14 greed escalation. Re-read each tick from RaidScene; drives spawn-rate
+  // boosts (multiplier on top of base spawnRateMult), tank-rush weighting
+  // (extra share lifted from Grunt → Tank), and the one-shot elite spawn at
+  // boss-wave step.
+  private greedStep = 0;
+  private eliteSpawned = false;
 
   constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider) {
     this.group = group;
     this.getPlayerPos = getPlayerPos;
   }
 
-  start(): void {
+  start(opts?: WaveDirectorOpts): void {
     this.active = true;
     this.elapsed = 0;
     this.spawnTimer = 0;
+    this.spawnRateMult = Math.max(0.05, opts?.spawnRateMult ?? 1);
+    this.enemyHpMult = Math.max(0.1, opts?.enemyHpMult ?? 1);
+    this.raidDuration = Math.max(1, opts?.raidDuration ?? Balance.raid.normalDuration);
+    this.greedStep = 0;
+    this.eliteSpawned = false;
   }
 
   stop(): void {
     this.active = false;
+  }
+
+  // Called by RaidScene each frame; the latest greed step drives the
+  // §7.3 escalation table (Balance.raid.greedEscalation).
+  setGreedStep(step: number): void {
+    this.greedStep = Math.max(0, Math.min(Balance.raid.greedEscalation.length - 1, step));
   }
 
   update(dt: number): void {
@@ -41,38 +73,58 @@ export class WaveDirector {
     this.elapsed += dt;
     this.spawnTimer -= dt;
 
-    const intensity = Math.min(1, this.elapsed / Balance.raid.normalDuration);
-    const cap = Math.min(Balance.enemies.maxOnScreen, 7 + Math.floor(intensity * 25));
+    const esc = Balance.raid.greedEscalation[this.greedStep];
+    const greedSpawnMult = esc.spawnRateMult;
+    const effectiveSpawnMult = this.spawnRateMult * greedSpawnMult;
+    const intensity = Math.min(1, this.elapsed / this.raidDuration);
+    const rawCap = 7 + Math.floor(intensity * 25);
+    const cap = Math.min(Balance.enemies.maxOnScreen, Math.max(1, Math.floor(rawCap * effectiveSpawnMult)));
+
+    // Boss wave (§7.3 greed x3): spawn a single elite the first time we cross
+    // a step that calls for one. The eliteSpawned latch ensures we don't
+    // re-summon on every frame after the threshold.
+    if (!this.eliteSpawned && esc.eliteCount > 0) {
+      for (let i = 0; i < esc.eliteCount; i++) this.spawnOne('elite');
+      this.eliteSpawned = true;
+    }
 
     if (this.spawnTimer > 0) return;
     if (this.countActive() >= cap) return;
 
     this.spawnOne();
-    this.spawnTimer = Phaser.Math.Linear(
+    // Lower spawn rate stretches the cooldown so total throughput scales with the multiplier.
+    const baseCooldown = Phaser.Math.Linear(
       Balance.enemies.spawnCooldownStart,
       Balance.enemies.spawnCooldownEnd,
       intensity,
     );
+    this.spawnTimer = baseCooldown / effectiveSpawnMult;
   }
 
   private pickKind(): EnemyKind {
-    // Weighted roll across blueprint §7.2 spawn weights.
-    // Elites (96-100%) are reserved for later milestones - we re-roll as Grunt.
+    // Weighted roll across §7.2 base spawn weights, with the §7.3 tank-rush
+    // factor lifting share from Grunt → Tank as greed escalates. Real Bomber
+    // type for greed x2 is deferred to a content pass; for now the rush is
+    // expressed as a higher Tank share.
+    // TODO(content): Bomber spawn slot at greed x2 (§14.1 / §7.3).
     const w = Balance.enemies.weights;
+    const tankRush = Balance.raid.greedEscalation[this.greedStep].tankRushFactor;
+    const gruntShare = Math.max(0.05, w.grunt - tankRush);
+    const tankShare = w.tank + tankRush;
     const r = Math.random();
-    let acc = w.grunt;
+    let acc = gruntShare;
     if (r < acc) return 'grunt';
     acc += w.swarmer;
     if (r < acc) return 'swarmer';
     acc += w.shooter;
     if (r < acc) return 'shooter';
-    acc += w.tank;
+    acc += tankShare;
     if (r < acc) return 'tank';
-    // Elite slot - return Grunt until elites are implemented.
-    return 'grunt';
+    // Elite slot - random elites are reserved for the boss-wave latch.
+    return 'tank';
   }
 
-  private spawnOne(): void {
+  private spawnOne(kindOverride?: EnemyKind): void {
     const player = this.getPlayerPos();
     const angle = Math.random() * Math.PI * 2;
     const dist = Balance.enemies.spawnDistance;
@@ -83,7 +135,7 @@ export class WaveDirector {
 
     const enemy = this.group.get(x, y) as Enemy | null;
     if (!enemy) return;
-    enemy.spawn(x, y, this.pickKind());
+    enemy.spawn(x, y, kindOverride ?? this.pickKind(), this.enemyHpMult);
   }
 
   private countActive(): number {

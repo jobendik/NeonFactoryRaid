@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
+import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
 
@@ -23,6 +24,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private hitInvulnTimer = 0;
   private facing = 0;
   private body_!: Phaser.Physics.Arcade.Body;
+  // FTUE safety net per §5.1: tutorial raid clamps HP so the player can't die.
+  // Default 0 means takeDamage behaves normally; tutorial sets it to 1.
+  private hpFloor = 0;
+  // Shield Bubble (§13). Each pickup grants +1 charge. takeDamage decrements
+  // first - if a charge absorbed the hit, the player takes no HP damage.
+  shieldCharges = 0;
+  private shieldAura: Phaser.GameObjects.Graphics | null = null;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Player.ensureTexture(scene);
@@ -104,6 +112,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setTint(Balance.colors.playerDashAccent);
     this.scene.time.delayedCall(Balance.player.dashDuration * 1000, () => this.clearTint());
     this.scene.cameras.main.shake(Balance.ui.dashShakeDuration, Balance.ui.dashShakeIntensity);
+    sfxDash();
   }
 
   isDashing(): boolean {
@@ -133,10 +142,37 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.speed = UpgradeEffects.playerSpeed();
   }
 
-  // Returns the amount actually applied; 0 if invulnerable or already at 0 HP.
+  // FTUE safety net: clamp the minimum HP. Tutorial sets 1 so the death path
+  // never fires. Pass 0 to disable.
+  setHpFloor(floor: number): void {
+    this.hpFloor = Math.max(0, floor);
+    if (this.hp < this.hpFloor) this.hp = this.hpFloor;
+  }
+
+  // Scales current and max HP by `mult`. Used for the tutorial's 2× HP buff -
+  // applied after construction so we don't have to thread the multiplier through
+  // every constructor.
+  applyHpMult(mult: number): void {
+    if (mult <= 0) return;
+    this.maxHp = Math.round(this.maxHp * mult);
+    this.hp = this.maxHp;
+  }
+
+  // Returns the amount actually applied; 0 if invulnerable, already at 0 HP,
+  // or fully absorbed by a Shield Bubble charge.
   takeDamage(amount: number): number {
     if (this.isInvulnerable() || this.hp <= 0) return 0;
-    const applied = Math.min(this.hp, amount);
+    if (this.shieldCharges > 0) {
+      this.shieldCharges -= 1;
+      this.hitInvulnTimer = Balance.player.invulnAfterHit;
+      this.flashShieldBreak();
+      this.refreshShieldAura();
+      bus.emit(Events.PLAYER_DAMAGED, 0, this.hp);
+      return 0;
+    }
+    const room = this.hp - this.hpFloor;
+    if (room <= 0) return 0;
+    const applied = Math.min(room, amount);
     this.hp -= applied;
     this.hitInvulnTimer = Balance.player.invulnAfterHit;
     this.scene.cameras.main.shake(Balance.ui.hitShakeDuration, Balance.ui.hitShakeIntensity);
@@ -144,8 +180,56 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.scene.time.delayedCall(110, () => {
       if (this.active) this.setAlpha(1);
     });
+    sfxPlayerHurt();
     bus.emit(Events.PLAYER_DAMAGED, applied, this.hp);
-    if (this.hp <= 0) bus.emit(Events.PLAYER_DIED);
+    if (this.hp <= 0) {
+      sfxPlayerDeath();
+      bus.emit(Events.PLAYER_DIED);
+    }
     return applied;
+  }
+
+  // Adds a shield charge from a Shield Bubble pickup. Multiple charges stack.
+  addShieldCharge(): void {
+    this.shieldCharges += 1;
+    this.refreshShieldAura();
+    sfxShieldGrant();
+  }
+
+  // Re-draws the white ring that visualizes an active shield. The aura sits
+  // on the scene rather than as a child so it survives the parent's tint changes.
+  private refreshShieldAura(): void {
+    if (this.shieldCharges <= 0) {
+      this.shieldAura?.destroy();
+      this.shieldAura = null;
+      return;
+    }
+    if (!this.shieldAura) {
+      this.shieldAura = this.scene.add.graphics().setDepth(this.depth + 1);
+    }
+    const g = this.shieldAura;
+    g.clear();
+    g.lineStyle(2, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, 22);
+  }
+
+  // Per-frame: keep the shield aura attached to the player.
+  syncShieldAura(): void {
+    if (this.shieldAura) this.shieldAura.setPosition(this.x, this.y);
+  }
+
+  private flashShieldBreak(): void {
+    const g = this.scene.add.graphics();
+    g.lineStyle(3, 0xffffff, 1);
+    g.strokeCircle(0, 0, 26);
+    g.setPosition(this.x, this.y).setDepth(this.depth + 2);
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      scale: 1.8,
+      duration: 280,
+      ease: 'Cubic.easeOut',
+      onComplete: () => g.destroy(),
+    });
   }
 }
