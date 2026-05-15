@@ -135,6 +135,15 @@ export const Balance = {
     machinesLostPerFail: { min: 1, max: 3 },
     failsBeforeInfestation: 3,
     killsToRestoreMachine: 30,
+    // M17 wave cadence: when the player has any infested machines, the
+    // raid spawns one extra red-tinted swarmer every spawnIntervalSec,
+    // beginning firstWaveDelaySec into the raid.
+    firstWaveDelaySec: 5,
+    spawnIntervalSec: 1.6,
+    // Per-frame jitter applied to infested enemy rotation so the visual
+    // reads "glitched" even though the body is stable.
+    glitchAmplitudeRad: 0.18,
+    glitchHz: 8,
   },
   prestige: {
     minGenLevel: 25,

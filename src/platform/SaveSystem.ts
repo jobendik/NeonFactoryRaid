@@ -6,7 +6,7 @@ import { SDKBridge } from './SDKBridge';
 import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -51,7 +51,13 @@ export interface SaveData {
   daily: SaveDaily;
   seasonPass: SaveSeason;
   cosmetics: SaveCosmetics;
-  infestation: { machineIds: number[] };
+  // M17 — infested machine indices into the active generator slot list.
+  // failsBeforeFirst counts down from 3 (per §4.4); the first 3 failed raids
+  // ignore infestation entirely.
+  infestation: { machineIds: number[]; failsBeforeFirst: number };
+  // M17 — flips true after the first-time infestation modal is dismissed
+  // (per Run C clarification #3). Only mid-game text modal in the build.
+  infestationTutorialSeen: boolean;
   stats: SaveStats;
   tutorialDone: boolean;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
@@ -91,7 +97,8 @@ export function createDefaultSave(): SaveData {
     daily: { lastClaim: '', streak: 0, questId: '', questProgress: 0 },
     seasonPass: { tier: 0, xp: 0, premium: false },
     cosmetics: { equipped: { trail: '', skin: '', theme: '' }, owned: [] },
-    infestation: { machineIds: [] },
+    infestation: { machineIds: [], failsBeforeFirst: Balance.infestation.failsBeforeInfestation },
+    infestationTutorialSeen: false,
     stats: { runs: 0, extracts: 0, totalScrap: 0, bestRaid: 0, killCount: 0 },
     tutorialDone: false,
     raidsCompleted: 0,
@@ -155,6 +162,26 @@ function migrateV2toV3(v2: MigratingSave): MigratingSave {
   };
 }
 
+// v3 → v4: M17 extends infestation with failsBeforeFirst (3-raid grace) and
+// adds infestationTutorialSeen (one-time mechanic explainer modal). Carry
+// existing machineIds; never start an existing player mid-grace if they
+// already failed raids in v3 (we have no way to know, so reset grace fresh).
+function migrateV3toV4(v3: MigratingSave): MigratingSave {
+  const oldInfest = (v3.infestation ?? {}) as { machineIds?: number[]; failsBeforeFirst?: number };
+  return {
+    ...v3,
+    version: 4,
+    infestation: {
+      machineIds: Array.isArray(oldInfest.machineIds) ? oldInfest.machineIds : [],
+      failsBeforeFirst:
+        typeof oldInfest.failsBeforeFirst === 'number'
+          ? oldInfest.failsBeforeFirst
+          : Balance.infestation.failsBeforeInfestation,
+    },
+    infestationTutorialSeen: false,
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -170,13 +197,14 @@ function migrate(raw: unknown): SaveData {
 
   if (save.version === 1) save = migrateV1toV2(save);
   if (save.version === 2) save = migrateV2toV3(save);
+  if (save.version === 3) save = migrateV3toV4(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 3) save = migrateV3toV4(save);
+  //   if (save.version === 4) save = migrateV4toV5(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

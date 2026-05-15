@@ -114,6 +114,22 @@ export const Strings = {
   operatorCostSuffix: ' Cores',
   operatorSelected: 'SELECTED',
   operatorUnlock: 'UNLOCK',
+
+  // M17 — infestation system. Per Run C clarification #3, the first-time
+  // mechanic modal copy is short (3 sentences max).
+  infestationSummaryPrefix: 'FACTORY INFESTED — ',
+  infestationSummarySuffix: ' machines disabled. Clear them in your next raid.',
+  infestationToast: 'Your factory is infested. Deploy to cleanse.',
+  infestationModalTitle: 'FACTORY INFESTED',
+  infestationModalBody:
+    'When you fail to extract, enemies infest your machines and stop their production. ' +
+    'Killing red infestation enemies on your next raid restores them. ' +
+    'Push to extract — your factory is at stake.',
+  infestationModalDismiss: 'GOT IT',
+  infestationCleansingPrefix: 'Cleansing: ',
+  infestationCleansingMid: ' / ',
+  infestationCleansingSuffix: ' machines',
+  infestationClearAd: 'CLEAR INFESTATION  [M20]',
 } as const;
 
 export type StringKey = keyof typeof Strings;

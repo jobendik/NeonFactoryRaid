@@ -23,6 +23,7 @@ import { MusicEngine } from '../audio/music';
 import { DraftSystem } from '../systems/DraftSystem';
 import { createDefaultRunMods, type RunMods } from '../systems/RunMods';
 import { OperatorSystem } from '../systems/OperatorSystem';
+import { InfestationSystem } from '../systems/InfestationSystem';
 import type { CardDef } from '../config/CardDefs';
 import type { DraftSceneInit } from './DraftScene';
 import { Rng } from '../core/Rng';
@@ -123,6 +124,9 @@ export class RaidScene extends Phaser.Scene {
   // and after a Drone Multiplier card pick.
   private operatorOrbs: Phaser.GameObjects.Graphics[] = [];
   private orbAngle = 0;
+  // M17 — kills against 'infested' enemies this raid. Counts toward
+  // restoring infested machines at raid end.
+  private cleanseProgress = 0;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => {
@@ -197,8 +201,14 @@ export class RaidScene extends Phaser.Scene {
         raidDuration,
       });
     } else {
-      this.waveDirector.start({ raidDuration });
+      // M17 — when the player has any infested machines, the director
+      // periodically spawns red-tinted swarmers. Tutorial bypassed.
+      this.waveDirector.start({
+        raidDuration,
+        infestationWave: InfestationSystem.hasInfestation(),
+      });
     }
+    this.cleanseProgress = 0;
 
     this.particles = new ParticleEffects(this);
     this.weapons = new WeaponSystem(
@@ -627,6 +637,29 @@ export class RaidScene extends Phaser.Scene {
     };
   }
 
+  // M17 cleanse status read by HUDScene for the top-right counter. Active
+  // only when the player has standing infestation. progressInWindow is the
+  // partial-machine kill count toward the next restore; machinesCleared is
+  // already applied THIS raid (not yet persisted).
+  getCleanseInfo(): { active: boolean; progressInWindow: number; perMachine: number; infestedRemaining: number } {
+    const total = InfestationSystem.totalSlots();
+    const infested = InfestationSystem.getInfestedIndices().length;
+    if (infested === 0 && this.cleanseProgress === 0) {
+      return { active: false, progressInWindow: 0, perMachine: Balance.infestation.killsToRestoreMachine, infestedRemaining: 0 };
+    }
+    void total;
+    const per = Balance.infestation.killsToRestoreMachine;
+    const machinesAlreadyCleared = Math.floor(this.cleanseProgress / per);
+    const remainingKills = this.cleanseProgress - machinesAlreadyCleared * per;
+    const infestedRemaining = Math.max(0, infested - machinesAlreadyCleared);
+    return {
+      active: infestedRemaining > 0 || this.cleanseProgress > 0,
+      progressInWindow: remainingKills,
+      perMachine: per,
+      infestedRemaining,
+    };
+  }
+
   // ---- overlap callbacks ----
 
   private onPickupOverlap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_playerObj, pickupObj) => {
@@ -871,6 +904,16 @@ export class RaidScene extends Phaser.Scene {
       }
     }
     this.updateFtueProgress(state);
+
+    // M17 — apply cleanse + maybe-infest. handleRaidEnd mutates the save in
+    // place; the persist() below captures everything in one shot.
+    const infOutcome = InfestationSystem.handleRaidEnd({
+      isTutorial: this.isTutorial,
+      state,
+      cleanseProgress: this.cleanseProgress,
+      rng: this.rng,
+    });
+
     // Persist immediately on raid-end so the player can't lose loot to a tab
     // close on the summary screen. The 10s autosave and the RAID_ENDED handler
     // both still fire later; this is the belt-and-suspenders save.
@@ -882,6 +925,8 @@ export class RaidScene extends Phaser.Scene {
       greedMult,
       penaltyApplied,
       tutorial: this.isTutorial,
+      newlyInfested: infOutcome.newlyInfested,
+      machinesRestored: infOutcome.restored,
     };
 
     // Small delay so the moment's tail visuals finish before the summary appears.
@@ -1029,11 +1074,15 @@ export class RaidScene extends Phaser.Scene {
       this.spawnDrops(target);
       const wasTank = target.kind === 'tank';
       const wasElite = target.kind === 'elite';
+      const wasInfested = target.kind === 'infested';
       target.kill();
       this.onEnemyKilled();
       sfxEnemyDeath();
       if (wasElite) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopEliteSec);
       else if (wasTank) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopTankSec);
+      // M17 cleanse credit. Each infestation kill counts 1 against the
+      // killsToRestoreMachine threshold.
+      if (wasInfested) this.cleanseProgress += 1;
       // Vampiric (drafted): on kill, chance to heal a small amount.
       if (this.runMods.vampiricChance > 0 && Math.random() < this.runMods.vampiricChance) {
         const healed = this.player.heal(this.runMods.vampiricHeal);
@@ -1063,8 +1112,10 @@ export class RaidScene extends Phaser.Scene {
       if (nextKilled) {
         this.particles.enemyDeath(next.kind, nextX, nextY);
         this.spawnDrops(next);
+        const wasInfestedChain = next.kind === 'infested';
         next.kill();
         this.onEnemyKilled();
+        if (wasInfestedChain) this.cleanseProgress += 1;
       }
       fromX = nextX;
       fromY = nextY;
@@ -1134,8 +1185,10 @@ export class RaidScene extends Phaser.Scene {
       if (dx * dx + dy * dy > r2) continue;
       this.particles.enemyDeath(e.kind, e.x, e.y);
       this.spawnDrops(e);
+      const wasInfestedNuke = e.kind === 'infested';
       e.kill();
       this.onEnemyKilled();
+      if (wasInfestedNuke) this.cleanseProgress += 1;
     }
     // Also clear in-flight enemy bullets so the nuke feels totally clean.
     for (const child of this.bullets.getChildren()) {

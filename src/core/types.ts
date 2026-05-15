@@ -14,6 +14,13 @@ export interface RaidEndPayload {
   penaltyApplied: boolean;
   // True when this was the FTUE tutorial raid (drives summary copy + downstream filters).
   tutorial: boolean;
+  // M17 — number of factory machines newly infested by this raid's outcome
+  // (always 0 for tutorial / extracted / grace-period failures). Surfaced
+  // on the SummaryScene as a prominent line so the player understands.
+  newlyInfested?: number;
+  // M17 — number of machines restored from cleanse this raid. Surfaced as
+  // a smaller line beneath the loot card.
+  machinesRestored?: number;
 }
 
 export interface RaidInitData {

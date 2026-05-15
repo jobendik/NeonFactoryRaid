@@ -38,6 +38,9 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
   // Knockback (M14). While > 0, the chaser tick is suppressed and the physics
   // body holds the externally-set velocity from applyKnockback().
   private knockbackTimer = 0;
+  // M17 glitch jitter (infested-only). Drives a sub-degree rotation wobble
+  // so the sprite reads as "corrupted" without affecting the body.
+  private glitchPhase = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Enemy.ensureTextures(scene);
@@ -112,6 +115,11 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       return this.tickShooter(dt, playerX, playerY);
     }
     this.tickChaser(playerX, playerY);
+    if (this.kind === 'infested') {
+      this.glitchPhase += dt * Balance.infestation.glitchHz;
+      const jitter = Math.sin(this.glitchPhase) * Balance.infestation.glitchAmplitudeRad;
+      this.setRotation(this.rotation + jitter);
+    }
     return { fired: null };
   }
 

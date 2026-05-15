@@ -24,6 +24,9 @@ export interface WaveDirectorOpts {
   // intensity reaches 1.0 at the end of a 45s tutorial instead of pretending
   // the raid is 75s long.
   raidDuration?: number;
+  // M17 — when true, the director spawns an extra red-tinted swarmer wave
+  // alongside the normal roll so the player has something to cleanse.
+  infestationWave?: boolean;
 }
 
 export class WaveDirector {
@@ -41,6 +44,11 @@ export class WaveDirector {
   // boss-wave step.
   private greedStep = 0;
   private eliteSpawned = false;
+  // M17 infestation wave state. When the player has any infested machines,
+  // the raid spawns periodic red-tinted swarmers in addition to the normal
+  // roll. spawnInterval picks one every infestSpawnIntervalSec seconds.
+  private infestationWave = false;
+  private infestSpawnTimer = 0;
 
   constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider) {
     this.group = group;
@@ -56,6 +64,8 @@ export class WaveDirector {
     this.raidDuration = Math.max(1, opts?.raidDuration ?? Balance.raid.normalDuration);
     this.greedStep = 0;
     this.eliteSpawned = false;
+    this.infestationWave = !!opts?.infestationWave;
+    this.infestSpawnTimer = Balance.infestation.firstWaveDelaySec;
   }
 
   stop(): void {
@@ -72,6 +82,16 @@ export class WaveDirector {
     if (!this.active) return;
     this.elapsed += dt;
     this.spawnTimer -= dt;
+
+    // M17 infestation wave: spawn one extra red-tinted swarmer every N seconds
+    // independently of the main spawn director, so cleanse pace is predictable.
+    if (this.infestationWave) {
+      this.infestSpawnTimer -= dt;
+      if (this.infestSpawnTimer <= 0) {
+        this.spawnOne('infested');
+        this.infestSpawnTimer = Balance.infestation.spawnIntervalSec;
+      }
+    }
 
     const esc = Balance.raid.greedEscalation[this.greedStep];
     const greedSpawnMult = esc.spawnRateMult;

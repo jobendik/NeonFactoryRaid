@@ -16,6 +16,7 @@ import { MusicEngine } from '../audio/music';
 import { sfxScrap, sfxCore, sfxUpgradePurchased, sfxGeneratorProduce } from '../audio/sfx';
 import { OperatorDefs, OPERATOR_ORDER, type OperatorId } from '../config/OperatorDefs';
 import { OperatorSystem } from '../systems/OperatorSystem';
+import { InfestationSystem } from '../systems/InfestationSystem';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -104,6 +105,9 @@ export class FactoryScene extends Phaser.Scene {
 
     this.showOfflineToast();
     this.refreshDeployPrompt();
+    this.maybeShowInfestationToast();
+    this.maybeShowInfestationTutorialModal();
+    this.buildClearInfestationStub();
     MusicEngine.startFactory();
   }
 
@@ -233,12 +237,20 @@ export class FactoryScene extends Phaser.Scene {
     // the second slot from generatorPositions slides in (per §8.5).
     const genLevel = Math.max(1, saveSystem.get().upgrades.gen);
     const slots = Balance.factory.generatorPositions.slice(0, Math.min(genLevel, Balance.factory.generatorPositions.length));
+    // M17 — Economy.computeSpm now reads infestation ratio automatically, so
+    // generatorDropIntervalSec already reflects fewer working machines. We
+    // multiply by the WORKING count (not slots.length) so each healthy
+    // generator drops at the right cadence to land at the post-infestation
+    // SPM. With 1 of 2 infested: working=1, perGenInterval = baseInterval.
+    const infested = new Set(InfestationSystem.getInfestedIndices());
+    const workingCount = Math.max(1, slots.length - infested.size);
     const totalIntervalSec = Economy.generatorDropIntervalSec();
-    // Each generator runs at the slowest cadence such that aggregate output = SPM.
-    // With N generators sharing the SPM, each generator's interval is N × baseInterval.
-    const perGenInterval = totalIntervalSec * Math.max(1, slots.length);
-    for (const slot of slots) {
-      this.generators.push(new Generator(this, slot.x, slot.y, perGenInterval));
+    const perGenInterval = totalIntervalSec * workingCount;
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const gen = new Generator(this, slot.x, slot.y, perGenInterval, i);
+      if (infested.has(i)) gen.setInfested(true);
+      this.generators.push(gen);
     }
   }
 
@@ -683,5 +695,148 @@ export class FactoryScene extends Phaser.Scene {
   private destroyOperatorPanel(): void {
     for (const o of this.operatorPanelObjects) o.destroy();
     this.operatorPanelObjects = [];
+  }
+
+  // Toast on FactoryScene entry when there's any standing infestation.
+  // Decoupled from the first-time modal — appears every visit until cleared.
+  private maybeShowInfestationToast(): void {
+    if (!InfestationSystem.hasInfestation()) return;
+    // Don't show alongside the explainer modal on the very first visit.
+    if (!saveSystem.get().infestationTutorialSeen) return;
+    const toast = this.add
+      .text(this.scale.width / 2, 100, Strings.infestationToast, {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        color: '#ff416b',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#1a0a14',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2200)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: toast,
+      alpha: 1,
+      y: 120,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(4500, () => {
+      this.tweens.add({
+        targets: toast,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => toast.destroy(),
+      });
+    });
+  }
+
+  // First-time-only mechanic explainer. Per Run C clarification #3, this is
+  // the only mid-game text modal in the build (outside the FTUE tutorial).
+  // Gated by save.infestationTutorialSeen.
+  private maybeShowInfestationTutorialModal(): void {
+    const save = saveSystem.get();
+    if (save.infestationTutorialSeen) return;
+    if (!InfestationSystem.hasInfestation()) return;
+
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const layer: Phaser.GameObjects.GameObject[] = [];
+    const backdrop = this.add
+      .rectangle(0, 0, w, h, 0x000000, 0.78)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3000)
+      .setInteractive();
+    layer.push(backdrop);
+
+    const panelW = 560;
+    const panelH = 280;
+    const panel = this.add
+      .rectangle(w / 2, h / 2, panelW, panelH, 0x101820, 0.98)
+      .setStrokeStyle(3, 0xff416b, 0.95)
+      .setScrollFactor(0)
+      .setDepth(3001);
+    layer.push(panel);
+
+    layer.push(
+      this.add
+        .text(w / 2, h / 2 - panelH / 2 + 28, Strings.infestationModalTitle, {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          color: '#ff416b',
+          stroke: '#000000',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(3002),
+    );
+    layer.push(
+      this.add
+        .text(w / 2, h / 2 - 20, Strings.infestationModalBody, {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: '#ffffff',
+          align: 'center',
+          wordWrap: { width: panelW - 60 },
+          lineSpacing: 6,
+        })
+        .setOrigin(0.5, 0.5)
+        .setScrollFactor(0)
+        .setDepth(3002),
+    );
+    const buttonY = h / 2 + panelH / 2 - 40;
+    const btn = this.add
+      .rectangle(w / 2, buttonY, 200, 44, 0xff416b, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3002)
+      .setInteractive({ useHandCursor: true });
+    layer.push(btn);
+    layer.push(
+      this.add
+        .text(w / 2, buttonY, Strings.infestationModalDismiss, {
+          fontFamily: 'monospace',
+          fontSize: '16px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3003),
+    );
+    const dismiss = (): void => {
+      InfestationSystem.markTutorialSeen();
+      void saveSystem.persist();
+      for (const o of layer) o.destroy();
+    };
+    btn.on('pointerdown', dismiss);
+  }
+
+  // [M20] stub button — disabled but visible so the player understands a
+  // "skip-the-cleanse" option is coming. Greyed and labelled per spec.
+  private buildClearInfestationStub(): void {
+    if (!InfestationSystem.hasInfestation()) return;
+    const x = this.scale.width / 2;
+    const y = this.scale.height - 240;
+    const bg = this.add
+      .rectangle(x, y, 240, 36, 0x444444, 0.55)
+      .setStrokeStyle(1, 0xffffff, 0.25)
+      .setScrollFactor(0)
+      .setDepth(2050);
+    const label = this.add
+      .text(x, y, Strings.infestationClearAd, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#888888',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.operatorPanelObjects.push(bg);
+    this.operatorPanelObjects.push(label);
   }
 }
