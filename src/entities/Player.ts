@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
+import { UpgradeEffects } from '../systems/UpgradeSystem';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
 
@@ -11,8 +12,9 @@ export interface PlayerInput {
 }
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
-  hp = Balance.player.baseHP;
-  maxHp = Balance.player.baseHP;
+  hp: number;
+  maxHp: number;
+  private speed: number;
   private vx = 0;
   private vy = 0;
   private dashTimer = 0;
@@ -32,6 +34,13 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.body_.setCollideWorldBounds(true);
     // Circular hit body slightly smaller than the visible triangle for forgiving collision.
     this.body_.setCircle(18, 6, 6);
+
+    // Derive max HP and speed from current upgrade levels at construction time.
+    // A new Player is created on each scene re-entry, so this re-reads after
+    // every upgrade purchase between raids.
+    this.maxHp = UpgradeEffects.playerMaxHp();
+    this.hp = this.maxHp;
+    this.speed = UpgradeEffects.playerSpeed();
   }
 
   static ensureTexture(scene: Phaser.Scene): void {
@@ -68,9 +77,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       this.vx *= damp;
       this.vy *= damp;
     } else {
-      const speed = Balance.player.baseSpeed;
-      const targetVx = input.x * speed;
-      const targetVy = input.y * speed;
+      const targetVx = input.x * this.speed;
+      const targetVy = input.y * this.speed;
       const a = Math.min(1, Balance.player.accel * dt);
       this.vx += (targetVx - this.vx) * a;
       this.vy += (targetVy - this.vy) * a;
@@ -112,6 +120,17 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   getFacing(): number {
     return this.facing;
+  }
+
+  // Re-reads max HP and speed from current upgrade levels. Used by FactoryScene
+  // when an upgrade is purchased mid-session so the player feels the change
+  // without having to redeploy.
+  refreshFromUpgrades(): void {
+    const newMax = UpgradeEffects.playerMaxHp();
+    if (newMax > this.maxHp) this.hp += newMax - this.maxHp;
+    this.maxHp = newMax;
+    if (this.hp > this.maxHp) this.hp = this.maxHp;
+    this.speed = UpgradeEffects.playerSpeed();
   }
 
   // Returns the amount actually applied; 0 if invulnerable or already at 0 HP.

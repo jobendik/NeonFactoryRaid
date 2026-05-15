@@ -77,19 +77,35 @@ export function createDefaultSave(): SaveData {
   };
 }
 
-// Migration path - new versions add their case here. Old saves walk forward step by step.
+// Migration path - new versions add their case here. Old saves walk forward step
+// by step. Per the M10 gate: a v0 save (no `version` field, written before
+// versioning existed) is treated as a fresh save - we don't try to merge
+// arbitrary partial shapes from a pre-history era.
 function migrate(raw: unknown): SaveData {
   if (!raw || typeof raw !== 'object') return createDefaultSave();
   const save = raw as Partial<SaveData> & { version?: number };
-  if (!save.version || save.version < SAVE_VERSION) {
-    // No prior versions yet. When v2 ships, add: if (save.version === 1) save = migrateV1toV2(save);
-    return { ...createDefaultSave(), ...save, version: SAVE_VERSION };
+
+  if (!save.version) {
+    // v0 (pre-versioning) → discard, start fresh.
+    return createDefaultSave();
   }
-  return save as SaveData;
+
+  if (save.version === SAVE_VERSION) {
+    return save as SaveData;
+  }
+
+  // Future migration steps register here:
+  //   if (save.version === 1) save = migrateV1toV2(save as SaveData);
+  //   if (save.version === 2) save = migrateV2toV3(save as SaveData);
+  // Unknown / future versions fall through to a fresh save - safer than
+  // running mismatched logic against a shape we don't understand.
+  return createDefaultSave();
 }
 
 export class SaveSystem {
   private data: SaveData = createDefaultSave();
+  // Transient: offline scrap computed at boot, displayed once as a toast.
+  private pendingOfflineScrap = 0;
 
   async load(): Promise<SaveData> {
     const raw = await SDKBridge.loadData<SaveData>(SAVE_KEY);
@@ -108,6 +124,16 @@ export class SaveSystem {
 
   set(data: SaveData): void {
     this.data = data;
+  }
+
+  setPendingOfflineScrap(amount: number): void {
+    this.pendingOfflineScrap = Math.max(0, amount);
+  }
+
+  consumePendingOfflineScrap(): number {
+    const v = this.pendingOfflineScrap;
+    this.pendingOfflineScrap = 0;
+    return v;
   }
 }
 
