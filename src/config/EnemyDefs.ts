@@ -1,10 +1,13 @@
 // Enemy definitions from blueprint.md §14.1 and §14.3.
-// Milestone 5 ships the four base kinds: Grunt, Swarmer, Tank, Shooter.
-// Elite/boss variants land in later milestones.
+// M5 ships the four base kinds (Grunt, Swarmer, Tank, Shooter).
+// M14 adds the 'elite' boss-wave variant that spawns at Greed x3 per §7.3.
+// Bomber, Loot Goblin, Shield Carrier, Splitter, Extract Jammer and the
+// Signal Hydra boss from §14.1 are deferred to a later content pass.
+// TODO(content): Bomber telegraphed explosion at greed x2 per §7.3.
 
 import { Balance } from './Balance';
 
-export type EnemyKind = 'grunt' | 'swarmer' | 'tank' | 'shooter';
+export type EnemyKind = 'grunt' | 'swarmer' | 'tank' | 'shooter' | 'elite';
 
 export type EnemyBehavior = 'chaser' | 'shooter';
 
@@ -69,6 +72,21 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     scrapDrop: 5,
     coreChance: 0.14,
     contactDamage: 8,
+  },
+  // §7.3 boss-wave elite. Stats are 4× Tank per the M14 spec (HP and contact
+  // damage); size scaled up so the visual reads as a boss. Distinctive color
+  // separates it from the Tank's orange.
+  elite: {
+    hp: 240,
+    speed: 64,
+    size: 56,
+    color: Balance.colors.elite,
+    textureKey: 'enemy-elite',
+    shape: 'square',
+    behavior: 'chaser',
+    scrapDrop: 24,
+    coreChance: 0.55,
+    contactDamage: 28,
   },
 };
 

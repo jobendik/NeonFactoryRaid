@@ -151,32 +151,39 @@ export class HUDScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2000);
 
+    // Combo sits just under the raid timer. Smaller / dimmer than greed so
+    // the eye reads the prominent yellow badge first.
     this.comboText = this.add
-      .text(cx, 52, '', {
+      .text(cx - 200, 24, '', {
         fontFamily: 'monospace',
-        fontSize: '16px',
+        fontSize: '15px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 3,
       })
-      .setOrigin(0.5, 0)
+      .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
+    // Greed badge per M14: bigger, brighter, with a contrasting background
+    // pill. Lives on the opposite side of the timer from combo so they
+    // never share screen space.
     this.greedText = this.add
-      .text(cx, 78, '', {
+      .text(cx + 200, 24, '', {
         fontFamily: 'monospace',
-        fontSize: '22px',
+        fontSize: '26px',
         color: '#ffd75a',
         stroke: '#000000',
-        strokeThickness: 4,
+        strokeThickness: 5,
+        backgroundColor: '#1a0a14',
+        padding: { x: 10, y: 4 },
       })
-      .setOrigin(0.5, 0)
+      .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     this.extractBanner = this.add
-      .text(cx, 108, '', {
+      .text(cx, 78, '', {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#72ff9f',
@@ -357,9 +364,9 @@ export class HUDScene extends Phaser.Scene {
 
     const greed = raid.getGreedInfo();
     if (greed.active && greed.mult > 1.0) {
-      this.greedText.setText(`${Strings.greedLabel}  x${greed.mult.toFixed(2)}`);
+      this.greedText.setText(`${Strings.greedLabel}  x${greed.mult.toFixed(2)}`).setVisible(true);
     } else {
-      this.greedText.setText('');
+      this.greedText.setText('').setVisible(false);
     }
 
     const ext = raid.getExtractionInfo();
@@ -436,7 +443,7 @@ export class HUDScene extends Phaser.Scene {
     // Hide raid-only widgets.
     this.timerText.setText('');
     this.comboText.setText('');
-    this.greedText.setText('');
+    this.greedText.setText('').setVisible(false);
     this.extractBanner.setText('');
     this.hpBarBg.setVisible(false);
     this.hpBarFill.setVisible(false);
@@ -466,7 +473,7 @@ export class HUDScene extends Phaser.Scene {
   private clearRaidHud(): void {
     this.timerText.setText('');
     this.comboText.setText('');
-    this.greedText.setText('');
+    this.greedText.setText('').setVisible(false);
     this.extractBanner.setText('');
     this.scrapText.setText('');
     this.coresText.setText('');

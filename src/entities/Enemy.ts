@@ -2,6 +2,14 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { EnemyDefs, ENEMY_TEXTURE_DIM, type EnemyKind, type EnemyDef } from '../config/EnemyDefs';
 
+// Texture dim per-spec: base 44px is enough for grunt/swarmer/tank/shooter,
+// but the M14 elite (size 56) needs a larger canvas with padding so it doesn't
+// clip. enemyTextureDim returns the base unless the spec's size demands more.
+const TEXTURE_PAD = 8;
+function enemyTextureDim(size: number): number {
+  return Math.max(ENEMY_TEXTURE_DIM, size + TEXTURE_PAD);
+}
+
 export interface EnemyFireRequest {
   fromX: number;
   fromY: number;
@@ -27,6 +35,9 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
   private telegraphTargetX = 0;
   private telegraphTargetY = 0;
   private telegraphGfx: Phaser.GameObjects.Graphics | null = null;
+  // Knockback (M14). While > 0, the chaser tick is suppressed and the physics
+  // body holds the externally-set velocity from applyKnockback().
+  private knockbackTimer = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Enemy.ensureTextures(scene);
@@ -48,7 +59,8 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setTexture(spec.textureKey);
     this.setPosition(x, y);
     const radius = spec.size / 2;
-    const offset = (ENEMY_TEXTURE_DIM - spec.size) / 2;
+    const dim = enemyTextureDim(spec.size);
+    const offset = (dim - spec.size) / 2;
     this.body_.setCircle(radius, offset, offset);
     this.body_.enable = true;
     this.setActive(true).setVisible(true);
@@ -60,6 +72,7 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       Balance.shooter.fireIntervalMaxSec,
     );
     this.telegraphLeft = 0;
+    this.knockbackTimer = 0;
     if (this.telegraphGfx) this.telegraphGfx.clear();
   }
 
@@ -88,12 +101,33 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       this.body_.setVelocity(0, 0);
       return { fired: null };
     }
+    if (this.knockbackTimer > 0) {
+      // Don't override the velocity that applyKnockback set; just count down
+      // and let physics drift the enemy along the impulse for a frame or two.
+      this.knockbackTimer -= dt;
+      return { fired: null };
+    }
     const spec = EnemyDefs[this.kind];
     if (spec.behavior === 'shooter') {
       return this.tickShooter(dt, playerX, playerY);
     }
     this.tickChaser(playerX, playerY);
     return { fired: null };
+  }
+
+  // Push the enemy away from (fromX, fromY) for knockbackDurSec. RaidScene
+  // calls this on player-bullet hits. Tanks get a smaller impulse so they
+  // still feel heavy.
+  applyKnockback(fromX: number, fromY: number): void {
+    if (!this.active) return;
+    const dx = this.x - fromX;
+    const dy = this.y - fromY;
+    const d = Math.hypot(dx, dy);
+    if (d <= 0.001) return;
+    const heavy = this.kind === 'tank' || this.kind === 'elite';
+    const speed = Balance.raid.knockbackSpeed * (heavy ? 0.35 : 1.0);
+    this.body_.setVelocity((dx / d) * speed, (dy / d) * speed);
+    this.knockbackTimer = Balance.raid.knockbackDurSec;
   }
 
   private tickChaser(playerX: number, playerY: number): void {
@@ -188,7 +222,7 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
   }
 
   private static makeTexture(scene: Phaser.Scene, spec: EnemyDef): void {
-    const dim = ENEMY_TEXTURE_DIM;
+    const dim = enemyTextureDim(spec.size);
     const g = scene.add.graphics();
     g.fillStyle(spec.color, 1);
     g.lineStyle(2, 0xffffff, 0.85);

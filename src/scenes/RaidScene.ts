@@ -83,6 +83,17 @@ export class RaidScene extends Phaser.Scene {
   private tutorialBanner: Phaser.GameObjects.Text | null = null;
   private powerups!: Phaser.GameObjects.Group;
   private powerupSystem!: PowerupSystem;
+  // §7.3 visual escalation: a red vignette overlay (HUD-relative) whose
+  // alpha matches the current greed step's vignette factor; an extra cool
+  // tint that fades in at the deep-end (x3) step.
+  private greedVignette: Phaser.GameObjects.Graphics | null = null;
+  private deepEndTint: Phaser.GameObjects.Rectangle | null = null;
+  // Hit-stop: when > 0 we skip update() side effects for a few frames so
+  // the kill of a Tank / elite has weight.
+  private hitStopTimer = 0;
+  // Near-miss tracking (M14). We remember which enemies were close-and-active
+  // during the most recent dash so each near-miss is awarded once per dash.
+  private nearMissAwarded = new Set<Enemy>();
   // Tracks the integer second of the previous frame so the timer-tick SFX
   // fires exactly once per second during the final 10s rather than every
   // frame. Set to -1 on raid start to skip the boot frame.
@@ -215,6 +226,10 @@ export class RaidScene extends Phaser.Scene {
       this.spawnTutorialBanner();
     }
 
+    this.hitStopTimer = 0;
+    this.nearMissAwarded.clear();
+    this.buildGreedOverlays();
+
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
@@ -233,8 +248,20 @@ export class RaidScene extends Phaser.Scene {
       return;
     }
 
+    if (this.hitStopTimer > 0) {
+      // Hit-stop "weight pause": the scene stays awake (HUD still ticks via
+      // its own update) but raid simulation halts for a frame or two. We
+      // still tick the timer so timeRemaining stays honest.
+      this.hitStopTimer -= dt;
+      return;
+    }
+
     this.timeRemaining = Math.max(0, this.timeRemaining - dt);
     this.elapsed += dt;
+
+    const greedStep = this.greed.getStep();
+    this.waveDirector.setGreedStep(greedStep);
+    this.updateGreedVisuals(greedStep);
 
     const frame = this.inputSystem.getInput();
     this.player.update(dt, frame);
@@ -284,6 +311,7 @@ export class RaidScene extends Phaser.Scene {
     this.tickTimerSfx();
     this.tickExtractionSfx(dt);
     this.tickAdaptiveMusic();
+    this.tickNearMiss();
 
     if (this.timeRemaining <= 0) {
       this.requestEnd('collapsed');
@@ -321,7 +349,7 @@ export class RaidScene extends Phaser.Scene {
 
   // Push tension / danger intensity into the music engine per §20.4 rules:
   //   tension: HP <= 50% OR Greed >= 1.5
-  //   danger:  HP <= 20% OR active enemies >= 10
+  //   danger:  HP <= 20% OR active enemies >= 10 OR Greed >= 2.0
   private tickAdaptiveMusic(): void {
     const hpRatio = this.player.maxHp > 0 ? this.player.hp / this.player.maxHp : 1;
     const greedMult = this.greed.getMultiplier();
@@ -330,6 +358,83 @@ export class RaidScene extends Phaser.Scene {
     const tension = hpRatio <= 0.5 || greedMult >= 1.5 ? 1 : 0;
     const danger = hpRatio <= 0.2 || enemyCount >= 10 || greedMult >= 2.0 ? 1 : 0;
     MusicEngine.setIntensity(tension, danger);
+  }
+
+  // Near-miss (M14): any enemy passes within nearMissRadius during a dash
+  // earns +N Scrap and a small popup. Each enemy can only score once per
+  // dash; the set clears every frame the player isn't dashing so a brushing
+  // pass-through during sustained chase doesn't endlessly fire.
+  private tickNearMiss(): void {
+    if (!this.player.isDashing()) {
+      this.nearMissAwarded.clear();
+      return;
+    }
+    const r2 = Balance.raid.nearMissRadius * Balance.raid.nearMissRadius;
+    const px = this.player.x;
+    const py = this.player.y;
+    for (const c of this.enemies.getChildren()) {
+      const e = c as Enemy;
+      if (!e.active || this.nearMissAwarded.has(e)) continue;
+      const dx = e.x - px;
+      const dy = e.y - py;
+      if (dx * dx + dy * dy <= r2) {
+        this.nearMissAwarded.add(e);
+        this.runLoot.scrap += Balance.raid.nearMissReward;
+        this.showPopup(px, py - 38, 'NEAR MISS', '#ffd75a');
+      }
+    }
+  }
+
+  // Build the M14 greed-step visuals (HUD-relative). Both overlays render at
+  // depth above gameplay but below HUDScene's UI strip.
+  private buildGreedOverlays(): void {
+    this.greedVignette?.destroy();
+    this.deepEndTint?.destroy();
+    this.greedVignette = this.add.graphics().setScrollFactor(0).setDepth(1800);
+    this.greedVignette.setAlpha(0);
+    this.deepEndTint = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x0a1428, 0.22)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(1801)
+      .setAlpha(0);
+    this.drawGreedVignette();
+  }
+
+  private drawGreedVignette(): void {
+    const g = this.greedVignette;
+    if (!g) return;
+    g.clear();
+    const w = this.scale.width;
+    const h = this.scale.height;
+    // Layer a series of inset rectangles in increasing alpha to fake a
+    // radial vignette. Cheap, and enough for the "danger frame" feel.
+    const color = Balance.colors.danger;
+    const bands = 6;
+    for (let i = 0; i < bands; i++) {
+      const inset = (i / bands) * Math.min(w, h) * 0.45;
+      g.lineStyle(Math.max(2, (1 - i / bands) * 22), color, 0.18);
+      g.strokeRect(inset, inset, w - inset * 2, h - inset * 2);
+    }
+  }
+
+  // Update the §7.3 visual escalation overlays for the current greed step.
+  private updateGreedVisuals(step: number): void {
+    const esc = Balance.raid.greedEscalation[Math.max(0, Math.min(Balance.raid.greedEscalation.length - 1, step))];
+    const g = this.greedVignette;
+    if (g) {
+      // Mild sine pulse on top of the step-base intensity so the danger
+      // frame breathes rather than sits flat.
+      const breathe = (Math.sin(this.elapsed * 3.4) + 1) / 2;
+      const alpha = Math.max(0, Math.min(1, esc.vignette * (0.85 + breathe * 0.3)));
+      g.setAlpha(alpha);
+    }
+    if (this.deepEndTint) {
+      const want = step >= Balance.raid.deepEndTintAt ? 0.42 : 0;
+      // Cheap lerp toward target so the tint glides in rather than snapping.
+      const cur = this.deepEndTint.alpha;
+      this.deepEndTint.setAlpha(cur + (want - cur) * 0.05);
+    }
   }
 
   shutdown(): void {
@@ -347,6 +452,11 @@ export class RaidScene extends Phaser.Scene {
       this.tutorialBanner.destroy();
       this.tutorialBanner = null;
     }
+    this.greedVignette?.destroy();
+    this.greedVignette = null;
+    this.deepEndTint?.destroy();
+    this.deepEndTint = null;
+    this.nearMissAwarded.clear();
     bus.emit(Events.RAID_ENDED);
   }
 
@@ -765,19 +875,25 @@ export class RaidScene extends Phaser.Scene {
 
   // processHit centralizes the per-hit damage path: render -damage popup, run
   // hit() / kill paths, then if Drone Swarm is up, chain to N more enemies
-  // within the chain radius.
+  // within the chain radius. M14 layers in knockback (push enemies away
+  // from the hit source) and hit-stop on Tank / elite kills.
   private processHit(target: Enemy, damage: number, sourceX: number, sourceY: number): void {
     if (!target.active) return;
     const tx = target.x;
     const ty = target.y;
+    target.applyKnockback(sourceX, sourceY);
     const killed = target.hit(damage);
-    this.showPopup(tx, ty - 16, `-${Math.round(damage)}`, '#ffffff');
+    this.showDamagePopup(tx, ty - 16, damage);
     if (killed) {
       this.particles.enemyDeath(target.kind, tx, ty);
       this.spawnDrops(target);
+      const wasTank = target.kind === 'tank';
+      const wasElite = target.kind === 'elite';
       target.kill();
       this.onEnemyKilled();
       sfxEnemyDeath();
+      if (wasElite) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopEliteSec);
+      else if (wasTank) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopTankSec);
     } else {
       sfxEnemyHit();
     }
@@ -797,8 +913,9 @@ export class RaidScene extends Phaser.Scene {
       this.weapons.drawTracer(fromX, fromY, next.x, next.y, PowerupDefs.droneSwarm.color);
       const nextX = next.x;
       const nextY = next.y;
+      next.applyKnockback(fromX, fromY);
       const nextKilled = next.hit(damage);
-      this.showPopup(nextX, nextY - 16, `-${Math.round(damage)}`, '#a76cff');
+      this.showDamagePopup(nextX, nextY - 16, damage, '#a76cff');
       if (nextKilled) {
         this.particles.enemyDeath(next.kind, nextX, nextY);
         this.spawnDrops(next);
@@ -808,10 +925,35 @@ export class RaidScene extends Phaser.Scene {
       fromX = nextX;
       fromY = nextY;
     }
-    // sourceX/sourceY currently unused - reserved if chain logic later wants to
-    // gate the FIRST chain on a max-distance-from-player check.
-    void sourceX;
-    void sourceY;
+  }
+
+  // §19.4 damage popups: combo >= 2 reads bigger + brighter so high-combo
+  // kills feel punchy. Shared with normal and chain hits.
+  private showDamagePopup(x: number, y: number, damage: number, baseColor: string = '#ffffff'): void {
+    const big = this.combo >= 2.0;
+    const fontSize = big ? '20px' : '14px';
+    const color = big ? '#ffd75a' : baseColor;
+    if (this.activePopups >= Balance.performance.maxPopups) return;
+    this.activePopups++;
+    const t = this.add.text(x, y, `-${Math.round(damage)}`, {
+      fontFamily: 'monospace',
+      fontSize,
+      color,
+      stroke: '#000000',
+      strokeThickness: big ? 4 : 3,
+    });
+    t.setOrigin(0.5).setDepth(100);
+    this.tweens.add({
+      targets: t,
+      y: y - Balance.ui.popupRiseDist * (big ? 1.4 : 1),
+      alpha: 0,
+      duration: Balance.ui.popupDurationMs,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        t.destroy();
+        this.activePopups--;
+      },
+    });
   }
 
   private findChainTarget(fromX: number, fromY: number, visited: Set<Enemy>): Enemy | null {

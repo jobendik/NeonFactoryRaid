@@ -24,6 +24,31 @@ export const Balance = {
     comboGraceSec: 2.2,
     draftTimeScale: 0.1,
     draftAutoPickSec: 8,
+    // §7.3 greed-side escalation. Indexed by greed step (0..4) matching the
+    // greedSteps table above. Spawn-rate mult goes through WaveDirector;
+    // tankRushFactor and eliteCount drive WaveDirector behavior; the vignette
+    // intensity drives the HUD red pulse.
+    greedEscalation: [
+      { spawnRateMult: 1.00, tankRushFactor: 0,    eliteCount: 0, vignette: 0.00 },
+      { spawnRateMult: 1.20, tankRushFactor: 0,    eliteCount: 0, vignette: 0.18 },
+      { spawnRateMult: 1.40, tankRushFactor: 0.20, eliteCount: 0, vignette: 0.35 },
+      { spawnRateMult: 1.60, tankRushFactor: 0.45, eliteCount: 0, vignette: 0.55 },
+      { spawnRateMult: 1.80, tankRushFactor: 0.55, eliteCount: 1, vignette: 0.78 },
+    ] as const,
+    // Knockback impulse applied to chasers on player-bullet hit. Decays over
+    // knockbackDurSec so the enemy resumes pursuit smoothly.
+    knockbackSpeed: 280,
+    knockbackDurSec: 0.12,
+    // Hit-stop on Tank / elite kills - whole RaidScene update pauses for this
+    // many seconds, then resumes. ~1-2 frames at 60fps.
+    hitStopTankSec: 0.05,
+    hitStopEliteSec: 0.09,
+    // Near-miss reward: enemy passes within Npx of player while player is
+    // dashing → +N Scrap. Cleared on dash end.
+    nearMissRadius: 30,
+    nearMissReward: 2,
+    // §7.3 "boss wave" - at greed x3 the deep-end tint deepens to signal it.
+    deepEndTintAt: 4,
   },
   // FTUE / tutorial raid per blueprint §5. The tutorial raid uses these mods on
   // top of normal balance; scripted events fire at the listed timestamps. Captions
@@ -180,6 +205,7 @@ export const Balance = {
     enemyTank: 0xff9c3d,
     enemyShooter: 0xa76cff,
     enemyTelegraph: 0xa76cff,
+    elite: 0xff1644,
     extraction: 0x72ff9f,
     bulletTracer: 0x22f6ff,
     background: 0x22f6ff,

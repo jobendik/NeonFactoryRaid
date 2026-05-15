@@ -50,6 +50,20 @@ export class GreedSystem {
     return this.elapsed;
   }
 
+  // Step index 0..N-1 matching Balance.raid.greedSteps and the parallel
+  // Balance.raid.greedEscalation table. 0 = inactive / not yet started.
+  // M14 systems (WaveDirector escalation, HUD vignette, etc.) read this
+  // each frame and apply step-keyed effects.
+  getStep(): number {
+    if (!this.running) return 0;
+    let step = 0;
+    const steps = Balance.raid.greedSteps;
+    for (let i = 0; i < steps.length; i++) {
+      if (this.elapsed >= steps[i].afterSeconds) step = i;
+    }
+    return step;
+  }
+
   private computeMultiplier(): number {
     let mult = 1.0;
     for (const step of Balance.raid.greedSteps) {
