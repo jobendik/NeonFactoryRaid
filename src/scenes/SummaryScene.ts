@@ -8,7 +8,9 @@ import type { RaidEndPayload, RaidEndState } from '../core/types';
 //   - One More Raid: stop+restart RaidScene for immediate redeploy.
 //   - Double Loot: rewarded-ad path, intentionally disabled until M20.
 //
-// Greed multiplier on extracted loot and the 50%-on-fail penalty come in M7.
+// Loot values arrive already-multiplied: greed applied on successful extract,
+// 50% penalty applied on failed/collapsed. The badge surfaces which of those
+// transforms ran so the player can read the math at a glance.
 
 const TITLE_FOR: Record<RaidEndState, string> = {
   extracted: Strings.summaryExtracted,
@@ -25,6 +27,8 @@ const TITLE_COLOR: Record<RaidEndState, string> = {
 export class SummaryScene extends Phaser.Scene {
   private endState: RaidEndState = 'collapsed';
   private loot = { scrap: 0, cores: 0 };
+  private greedMult = 1.0;
+  private penaltyApplied = false;
 
   constructor() {
     super({ key: 'SummaryScene' });
@@ -34,6 +38,8 @@ export class SummaryScene extends Phaser.Scene {
     if (data) {
       this.endState = data.endState;
       this.loot = { scrap: data.loot.scrap, cores: data.loot.cores };
+      this.greedMult = data.greedMult ?? 1.0;
+      this.penaltyApplied = !!data.penaltyApplied;
     }
   }
 
@@ -56,6 +62,29 @@ export class SummaryScene extends Phaser.Scene {
         strokeThickness: 4,
       })
       .setOrigin(0.5, 0);
+
+    // Modifier badge: greed mult on extract, penalty notice on fail/collapse.
+    if (this.endState === 'extracted' && this.greedMult > 1.0) {
+      this.add
+        .text(w / 2, h * 0.30, `${Strings.greedLabel}  x${this.greedMult.toFixed(2)}`, {
+          fontFamily: 'monospace',
+          fontSize: '24px',
+          color: '#ffd75a',
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5);
+    } else if (this.penaltyApplied) {
+      this.add
+        .text(w / 2, h * 0.30, Strings.summaryPenalty, {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: '#ff416b',
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5);
+    }
 
     // Loot card
     const cardY = h * 0.40;

@@ -8,6 +8,7 @@ import { WaveDirector } from '../systems/WaveDirector';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { ParticleEffects } from '../systems/ParticleEffects';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
+import { GreedSystem } from '../systems/GreedSystem';
 import { Balance } from '../config/Balance';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
@@ -36,6 +37,7 @@ export class RaidScene extends Phaser.Scene {
   private weapons!: WeaponSystem;
   private particles!: ParticleEffects;
   private extraction!: ExtractionSystem;
+  private greed!: GreedSystem;
   private runLoot = { scrap: 0, cores: 0 };
   private combo = 1.0;
   private comboGrace = 0;
@@ -45,6 +47,7 @@ export class RaidScene extends Phaser.Scene {
   private extractTimer = 0;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
+  private onExtractionOpened = (): void => this.greed.start();
 
   constructor() {
     super({ key: 'RaidScene' });
@@ -110,6 +113,8 @@ export class RaidScene extends Phaser.Scene {
       Balance.raid.extractionOpenTime,
     );
 
+    this.greed = new GreedSystem();
+
     this.runLoot.scrap = 0;
     this.runLoot.cores = 0;
     this.combo = 1.0;
@@ -120,6 +125,7 @@ export class RaidScene extends Phaser.Scene {
 
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
+    bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
 
     bus.emit(Events.RAID_STARTED);
   }
@@ -140,6 +146,7 @@ export class RaidScene extends Phaser.Scene {
     this.player.update(dt, frame);
     this.waveDirector.update(dt);
     this.extraction.update(dt, this.player.x, this.player.y);
+    this.greed.update(dt);
 
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
@@ -180,10 +187,12 @@ export class RaidScene extends Phaser.Scene {
   shutdown(): void {
     bus.off(Events.PLAYER_DIED, this.onPlayerDied);
     bus.off(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
+    bus.off(Events.EXTRACTION_OPENED, this.onExtractionOpened);
     this.waveDirector.stop();
     this.inputSystem.destroy();
     this.particles.destroy();
     this.extraction.destroy();
+    this.greed.stop();
     bus.emit(Events.RAID_ENDED);
   }
 
@@ -212,6 +221,14 @@ export class RaidScene extends Phaser.Scene {
       padX: pos.x,
       padY: pos.y,
       fill: this.extraction.getFill(),
+    };
+  }
+
+  getGreedInfo(): { active: boolean; mult: number; elapsed: number } {
+    return {
+      active: this.greed.isRunning(),
+      mult: this.greed.getMultiplier(),
+      elapsed: this.greed.getElapsed(),
     };
   }
 
@@ -409,10 +426,30 @@ export class RaidScene extends Phaser.Scene {
     this.phase = 'ended';
     this.extraction.finish();
     this.waveDirector.stop();
+    this.greed.stop();
+
+    // Greed multiplies banked loot on successful extract. Death and collapse
+    // both forfeit 50% of unbanked loot per the prototype rule. Combo is already
+    // baked into pickup values at drop time.
+    let scrap = this.runLoot.scrap;
+    let cores = this.runLoot.cores;
+    let greedMult = 1.0;
+    let penaltyApplied = false;
+    if (state === 'extracted') {
+      greedMult = this.greed.getMultiplier();
+      scrap = Math.round(scrap * greedMult);
+      cores = Math.round(cores * greedMult);
+    } else {
+      scrap = Math.floor(scrap * 0.5);
+      cores = Math.floor(cores * 0.5);
+      penaltyApplied = true;
+    }
 
     const payload: RaidEndPayload = {
       endState: state,
-      loot: { scrap: this.runLoot.scrap, cores: this.runLoot.cores },
+      loot: { scrap, cores },
+      greedMult,
+      penaltyApplied,
     };
 
     // Small delay so the moment's tail visuals finish before the summary appears.

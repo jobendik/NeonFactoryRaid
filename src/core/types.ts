@@ -8,6 +8,10 @@ export type RaidEndState = 'extracted' | 'failed' | 'collapsed';
 export interface RaidEndPayload {
   endState: RaidEndState;
   loot: { scrap: number; cores: number };
+  // Multiplier already applied to `loot` when state === 'extracted'. 1.0 otherwise.
+  greedMult: number;
+  // True when 50% unbanked-loot penalty was applied (state === 'failed' | 'collapsed').
+  penaltyApplied: boolean;
 }
 
 export interface UpgradeLevels {
