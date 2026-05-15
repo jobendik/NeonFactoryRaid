@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Enemy } from '../entities/Enemy';
+import { sfxShoot } from '../audio/sfx';
 
 // Auto-aim weapon per blueprint §6.3: targets the nearest active enemy within
 // (baseRange + rangePerDamage * damageLevel) px, fires at Balance.weapon.baseFireCooldown.
@@ -73,6 +74,7 @@ export class WeaponSystem {
       this.fireTracer(t.x, t.y);
       hits.push({ target: t, damage });
     }
+    sfxShoot();
     this.fireTimer = Balance.weapon.baseFireCooldown / this.fireRateMult;
     return hits;
   }

@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
+import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
 
@@ -111,6 +112,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setTint(Balance.colors.playerDashAccent);
     this.scene.time.delayedCall(Balance.player.dashDuration * 1000, () => this.clearTint());
     this.scene.cameras.main.shake(Balance.ui.dashShakeDuration, Balance.ui.dashShakeIntensity);
+    sfxDash();
   }
 
   isDashing(): boolean {
@@ -178,8 +180,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.scene.time.delayedCall(110, () => {
       if (this.active) this.setAlpha(1);
     });
+    sfxPlayerHurt();
     bus.emit(Events.PLAYER_DAMAGED, applied, this.hp);
-    if (this.hp <= 0) bus.emit(Events.PLAYER_DIED);
+    if (this.hp <= 0) {
+      sfxPlayerDeath();
+      bus.emit(Events.PLAYER_DIED);
+    }
     return applied;
   }
 
@@ -187,6 +193,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   addShieldCharge(): void {
     this.shieldCharges += 1;
     this.refreshShieldAura();
+    sfxShieldGrant();
   }
 
   // Re-draws the white ring that visualizes an active shield. The aura sits

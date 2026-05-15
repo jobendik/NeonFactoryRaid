@@ -12,6 +12,8 @@ import { Strings } from '../config/Strings';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeCard } from '../ui/UpgradeCard';
 import { UPGRADE_KEYS, type UpgradeKey } from '../config/UpgradeDefs';
+import { MusicEngine } from '../audio/music';
+import { sfxScrap, sfxCore, sfxUpgradePurchased, sfxGeneratorProduce } from '../audio/sfx';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -96,6 +98,7 @@ export class FactoryScene extends Phaser.Scene {
 
     this.showOfflineToast();
     this.refreshDeployPrompt();
+    MusicEngine.startFactory();
   }
 
   // The §5.2 scripted moment: right after the player buys Gen Lv. 2 in their
@@ -146,7 +149,10 @@ export class FactoryScene extends Phaser.Scene {
     // Generators tick on the SPM cadence; output divides across active gens so
     // total factory throughput tracks SPM exactly.
     for (const gen of this.generators) {
-      if (gen.tick(dt)) this.spawnScrapAt(gen);
+      if (gen.tick(dt)) {
+        this.spawnScrapAt(gen);
+        sfxGeneratorProduce();
+      }
     }
 
     for (const drone of this.drones) drone.update(dt, this.player.x, this.player.y);
@@ -182,6 +188,7 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   shutdown(): void {
+    MusicEngine.stop();
     bus.off(Events.UPGRADE_PURCHASED, this.onUpgradePurchased);
     // Bracket the scene transition with a save so deploy-and-die can't lose
     // upgrades the player just bought.
@@ -317,6 +324,7 @@ export class FactoryScene extends Phaser.Scene {
     // After Gen Lv. 2 - the scripted §5.2 first-purchase - light up the deploy
     // pad so the player understands what to do next.
     this.refreshDeployPrompt();
+    sfxUpgradePurchased();
   }
 
   private rebuildFactoryFloor(): void {
@@ -435,6 +443,8 @@ export class FactoryScene extends Phaser.Scene {
     const value = p.value;
     if (type === 'scrap') Economy.bankLoot(value, 0);
     else Economy.bankLoot(0, value);
+    if (type === 'core') sfxCore();
+    else sfxScrap();
     p.kill();
     bus.emit(Events.PICKUP_COLLECTED, type, value);
   };

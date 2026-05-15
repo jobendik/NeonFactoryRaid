@@ -18,8 +18,26 @@ import { Strings } from '../config/Strings';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { PowerupDefs } from '../config/PowerupDefs';
 import { bus, Events } from '../core/EventBus';
-import { playRisingChord } from '../platform/Audio';
 import { saveSystem } from '../platform/SaveSystem';
+import { MusicEngine } from '../audio/music';
+import {
+  sfxCore,
+  sfxScrap,
+  sfxPowerup,
+  sfxEnemyHit,
+  sfxEnemyDeath,
+  sfxEnemyShoot,
+  sfxExtractionOpen,
+  sfxExtractionTick,
+  sfxExtractionSuccess,
+  sfxRaidFailed,
+  sfxTimerTick,
+  sfxNuke,
+  sfxMagnetBurst,
+  sfxLaserOverdrive,
+  sfxFreezePulse,
+  sfxTimeBonus,
+} from '../audio/sfx';
 import type {
   RaidEndState,
   RaidEndPayload,
@@ -65,9 +83,18 @@ export class RaidScene extends Phaser.Scene {
   private tutorialBanner: Phaser.GameObjects.Text | null = null;
   private powerups!: Phaser.GameObjects.Group;
   private powerupSystem!: PowerupSystem;
+  // Tracks the integer second of the previous frame so the timer-tick SFX
+  // fires exactly once per second during the final 10s rather than every
+  // frame. Set to -1 on raid start to skip the boot frame.
+  private lastTickSecond = -1;
+  // Tracks whether we already played extraction-tick this filling window.
+  private extractionTickElapsed = 0;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
-  private onExtractionOpened = (): void => this.greed.start();
+  private onExtractionOpened = (): void => {
+    this.greed.start();
+    sfxExtractionOpen();
+  };
 
   constructor() {
     super({ key: 'RaidScene' });
@@ -192,6 +219,7 @@ export class RaidScene extends Phaser.Scene {
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
 
+    MusicEngine.startRaid();
     bus.emit(Events.RAID_STARTED);
   }
 
@@ -253,10 +281,55 @@ export class RaidScene extends Phaser.Scene {
 
     this.tickBullets(dt);
     this.tickCombo(dt);
+    this.tickTimerSfx();
+    this.tickExtractionSfx(dt);
+    this.tickAdaptiveMusic();
 
     if (this.timeRemaining <= 0) {
       this.requestEnd('collapsed');
     }
+  }
+
+  // Metronome click during the final 10s of a raid. Fires once per integer
+  // second so we don't carpet-bomb the SFX bus at frame rate.
+  private tickTimerSfx(): void {
+    if (this.timeRemaining > 10) {
+      this.lastTickSecond = -1;
+      return;
+    }
+    const sec = Math.ceil(this.timeRemaining);
+    if (sec !== this.lastTickSecond && sec >= 0) {
+      this.lastTickSecond = sec;
+      sfxTimerTick();
+    }
+  }
+
+  // Quiet pulse while the player holds the extraction pad (fill > 0).
+  // Fires every 0.5s and stops when they step off or extract.
+  private tickExtractionSfx(dt: number): void {
+    const ext = this.extraction.getFill();
+    if (ext <= 0 || !this.extraction.isOpen()) {
+      this.extractionTickElapsed = 0;
+      return;
+    }
+    this.extractionTickElapsed += dt;
+    if (this.extractionTickElapsed >= 0.5) {
+      this.extractionTickElapsed = 0;
+      sfxExtractionTick();
+    }
+  }
+
+  // Push tension / danger intensity into the music engine per §20.4 rules:
+  //   tension: HP <= 50% OR Greed >= 1.5
+  //   danger:  HP <= 20% OR active enemies >= 10
+  private tickAdaptiveMusic(): void {
+    const hpRatio = this.player.maxHp > 0 ? this.player.hp / this.player.maxHp : 1;
+    const greedMult = this.greed.getMultiplier();
+    let enemyCount = 0;
+    for (const c of this.enemies.getChildren()) if (c.active) enemyCount++;
+    const tension = hpRatio <= 0.5 || greedMult >= 1.5 ? 1 : 0;
+    const danger = hpRatio <= 0.2 || enemyCount >= 10 || greedMult >= 2.0 ? 1 : 0;
+    MusicEngine.setIntensity(tension, danger);
   }
 
   shutdown(): void {
@@ -269,6 +342,7 @@ export class RaidScene extends Phaser.Scene {
     this.extraction.destroy();
     this.greed.stop();
     this.powerupSystem.stop();
+    MusicEngine.stop();
     if (this.tutorialBanner) {
       this.tutorialBanner.destroy();
       this.tutorialBanner = null;
@@ -330,11 +404,14 @@ export class RaidScene extends Phaser.Scene {
       );
     }
     if (type === 'core') {
+      sfxCore();
       const save = saveSystem.get();
       if (!save.firstCoreCollected) {
         save.firstCoreCollected = true;
         save.ftueUnlocks.luckUpgrade = true;
       }
+    } else {
+      sfxScrap();
     }
     p.kill();
     bus.emit(Events.PICKUP_COLLECTED, type, value);
@@ -404,6 +481,7 @@ export class RaidScene extends Phaser.Scene {
     const b = this.bullets.get(fromX, fromY) as Bullet | null;
     if (!b) return;
     b.fire(fromX, fromY, dirX, dirY, Balance.shooter.bulletSpeed, Balance.shooter.bulletDamage);
+    sfxEnemyShoot();
   }
 
   private tickBullets(dt: number): void {
@@ -482,7 +560,8 @@ export class RaidScene extends Phaser.Scene {
 
     // Brief frame freeze + radial light blast at the player.
     this.spawnRadialFlash();
-    playRisingChord();
+    // §20.3 layered extraction success - boom + sweep + sparkle + chord.
+    sfxExtractionSuccess();
   }
 
   private updateExtractionMoment(dt: number): void {
@@ -515,6 +594,8 @@ export class RaidScene extends Phaser.Scene {
     this.extraction.finish();
     this.waveDirector.stop();
     this.greed.stop();
+    MusicEngine.stop();
+    if (state === 'failed' || state === 'collapsed') sfxRaidFailed();
 
     // Greed multiplies banked loot on successful extract. Death and collapse
     // both forfeit 50% of unbanked loot per the prototype rule. Combo is already
@@ -672,6 +753,13 @@ export class RaidScene extends Phaser.Scene {
     // §13: every power-up surfaces its label as a popup so the player learns
     // the names without a tooltip.
     this.showPopup(this.player.x, this.player.y - 24, def.label, '#ffd75a');
+    sfxPowerup();
+    // Distinctive per-kind cue plays on top of the generic chirp. Shield uses
+    // its own SFX inside Player.addShieldCharge; nuke/timeBonus are routed via
+    // their activation handlers.
+    if (kind === 'magnetBurst') sfxMagnetBurst();
+    else if (kind === 'laserOverdrive') sfxLaserOverdrive();
+    else if (kind === 'freezePulse') sfxFreezePulse();
     bus.emit(Events.POWERUP_COLLECTED, kind);
   };
 
@@ -689,6 +777,9 @@ export class RaidScene extends Phaser.Scene {
       this.spawnDrops(target);
       target.kill();
       this.onEnemyKilled();
+      sfxEnemyDeath();
+    } else {
+      sfxEnemyHit();
     }
 
     // Chain (Drone Swarm). Each chain hop deals the same damage; chain count
@@ -747,6 +838,7 @@ export class RaidScene extends Phaser.Scene {
   private activateSignalNuke(): void {
     const r2 = Balance.powerups.signalNukeRadius * Balance.powerups.signalNukeRadius;
     this.cameras.main.shake(180, 0.012);
+    sfxNuke();
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
       if (!e.active) continue;
@@ -769,6 +861,7 @@ export class RaidScene extends Phaser.Scene {
   // bump is visible immediately.
   private activateTimeBonus(): void {
     this.timeRemaining += Balance.powerups.timeBonusSeconds;
+    sfxTimeBonus();
   }
 
   // ---- waypoint target (consumed by HUDScene) ----

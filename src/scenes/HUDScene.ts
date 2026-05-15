@@ -2,6 +2,9 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { Economy } from '../systems/EconomySystem';
+import { MuteButton } from '../ui/MuteButton';
+import { SettingsMenu } from '../ui/SettingsMenu';
+import { AudioBus } from '../audio/AudioBus';
 import type { RaidScene } from './RaidScene';
 import type { FactoryScene } from './FactoryScene';
 
@@ -71,6 +74,7 @@ export class HUDScene extends Phaser.Scene {
   // Reusable pip slots (allocated once, shown/hidden per frame).
   private powerupPips: PowerupPip[] = [];
   private shieldPip!: PowerupPip;
+  private settingsMenu!: SettingsMenu;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -217,6 +221,63 @@ export class HUDScene extends Phaser.Scene {
     // entries today). Anything beyond that just stops rendering.
     for (let i = 0; i < 4; i++) this.powerupPips.push(this.makePip(i));
     this.shieldPip = this.makePip(0);
+
+    // MuteButton's constructor wires itself into the scene; we don't need
+    // to keep a handle (the redraw callback runs from its own pointer listener).
+    void new MuteButton(this);
+    this.buildSettingsButton();
+    this.settingsMenu = new SettingsMenu(this);
+
+    // Browsers refuse to start AudioContext until a user gesture. We listen
+    // game-wide for the first pointer/key event and call resume(); after
+    // that, sfx + music can play freely.
+    const unlock = (): void => {
+      AudioBus.resume();
+      this.input.off('pointerdown', unlock);
+      const keyboard = this.input.keyboard;
+      if (keyboard) keyboard.off('keydown', unlock);
+    };
+    this.input.on('pointerdown', unlock);
+    const keyboard = this.input.keyboard;
+    if (keyboard) keyboard.on('keydown', unlock);
+  }
+
+  // Gear icon to the left of the mute button. Opens the SettingsMenu modal.
+  private buildSettingsButton(): void {
+    const size = 22;
+    const padding = 12;
+    const x = this.scale.width - padding - size - 8 - size;
+    const y = padding;
+    const g = this.add.graphics().setScrollFactor(0).setDepth(2300);
+    g.setPosition(x + size / 2, y + size / 2);
+    g.fillStyle(0x101820, 0.85);
+    g.fillCircle(0, 0, size / 2);
+    g.lineStyle(1.5, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, size / 2);
+    // Cog teeth - 8 small lines radiating outward.
+    g.lineStyle(2, 0xffffff, 0.95);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const inner = size / 2 - 5;
+      const outer = size / 2 + 2;
+      g.lineBetween(Math.cos(a) * inner, Math.sin(a) * inner, Math.cos(a) * outer, Math.sin(a) * outer);
+    }
+    g.lineStyle(1.5, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, 4);
+    // The graphics object isn't held - it lives on the scene's display list
+    // for the rest of the session. The hit zone owns the click handler.
+    void g;
+
+    const hit = this.add
+      .zone(x, y, size, size)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2300)
+      .setInteractive({ useHandCursor: true });
+    hit.on('pointerdown', () => {
+      if (this.settingsMenu.isOpen()) this.settingsMenu.close();
+      else this.settingsMenu.open();
+    });
   }
 
   private makePip(index: number): PowerupPip {

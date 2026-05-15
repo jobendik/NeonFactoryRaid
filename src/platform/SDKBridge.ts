@@ -4,9 +4,13 @@
 //   - logs SDK lifecycle calls (so we can verify wiring at integration time)
 //   - returns "reward granted" for rewarded ads (so reward flows work end-to-end locally)
 //   - persists/loads via localStorage
+//   - exposes a setMuted() entry point for §20.5 ("Honor CrazyGames SDK mute
+//     events"). In Phase 3 the real SDK's mute callback wires into this.
 //
 // The interface here mirrors the production shape so the only change in Phase 3 will be
 // replacing the method bodies, not the callsites.
+
+import { AudioBus } from '../audio/AudioBus';
 
 export interface RewardedAdResult {
   success: boolean;
@@ -25,6 +29,13 @@ class SDKBridgeImpl {
   async init(): Promise<void> {
     // Real SDK init happens in Phase 3. For now, mark as ready immediately.
     this.readyResolved = true;
+  }
+
+  // Called by the host platform when it wants the game muted (ads playing,
+  // user backgrounded the tab, etc.). Routes to AudioBus's platform-mute
+  // channel which is independent from the player's mute checkbox.
+  setMuted(muted: boolean): void {
+    AudioBus.setPlatformMute(muted);
   }
 
   loadingStart(): void {
