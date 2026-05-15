@@ -25,9 +25,11 @@ import { createDefaultRunMods, type RunMods } from '../systems/RunMods';
 import { OperatorSystem } from '../systems/OperatorSystem';
 import { InfestationSystem } from '../systems/InfestationSystem';
 import { DailyQuestSystem } from '../systems/DailyQuestSystem';
+import { LeaderboardSystem } from '../systems/LeaderboardSystem';
+import { todayUtcDate as todayUtcDateForLeaderboard } from '../config/QuestDefs';
 import type { CardDef } from '../config/CardDefs';
 import type { DraftSceneInit } from './DraftScene';
-import { Rng } from '../core/Rng';
+import { Rng, dailySeed } from '../core/Rng';
 import {
   sfxCore,
   sfxScrap,
@@ -50,6 +52,7 @@ import type {
   RaidEndState,
   RaidEndPayload,
   RaidInitData,
+  RaidMode,
   WaypointTarget,
 } from '../core/types';
 
@@ -86,6 +89,9 @@ export class RaidScene extends Phaser.Scene {
   private phase: RaidPhase = 'active';
   private extractTimer = 0;
   private isTutorial = false;
+  // M19 — explicit raid mode. Drives Rng seeding + post-extract score
+  // recording for the daily-seed leaderboard.
+  private mode: RaidMode = 'normal';
   private elapsed = 0;
   private captionDoneIdx = -1;
   private tutorialBanner: Phaser.GameObjects.Text | null = null;
@@ -141,6 +147,7 @@ export class RaidScene extends Phaser.Scene {
 
   init(data?: RaidInitData): void {
     this.isTutorial = !!data?.tutorial;
+    this.mode = data?.mode ?? (this.isTutorial ? 'tutorial' : 'normal');
   }
 
   create(): void {
@@ -150,6 +157,14 @@ export class RaidScene extends Phaser.Scene {
     this.physics.world.setBounds(wb.minX, wb.minY, width, height);
     this.cameras.main.setBounds(wb.minX, wb.minY, width, height);
     this.cameras.main.setBackgroundColor(Balance.rendering.backgroundColor);
+
+    // M19 — seed the per-raid Rng based on mode. Daily-seed mode pulls the
+    // dailySeed() so all players today get the same enemy spawns / power-up
+    // locations / drops. Tutorial + normal modes seed from Date.now() (still
+    // not deterministic across players, but threaded so the same Rng drives
+    // every stochastic call in this raid).
+    const seed = this.mode === 'dailySeed' ? dailySeed() : Date.now();
+    this.rng = new Rng(seed);
 
     this.drawBackground();
 
@@ -188,10 +203,11 @@ export class RaidScene extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.bullets, this.onPlayerBulletOverlap, undefined, this);
     this.physics.add.overlap(this.player, this.powerups, this.onPowerupOverlap, undefined, this);
 
-    this.waveDirector = new WaveDirector(this.enemies, () => ({
-      x: this.player.x,
-      y: this.player.y,
-    }));
+    this.waveDirector = new WaveDirector(
+      this.enemies,
+      () => ({ x: this.player.x, y: this.player.y }),
+      this.rng,
+    );
     const raidDuration = this.isTutorial
       ? Balance.raid.tutorialDuration
       : Balance.raid.normalDuration;
@@ -216,6 +232,7 @@ export class RaidScene extends Phaser.Scene {
       this,
       () => ({ x: this.player.x, y: this.player.y }),
       () => this.enemies.getChildren(),
+      this.rng,
     );
     this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
     if (this.isTutorial) this.weapons.setDamageMult(Balance.tutorial.playerDamageMult);
@@ -240,6 +257,7 @@ export class RaidScene extends Phaser.Scene {
         timeBonus: () => this.activateTimeBonus(),
         shieldGrant: () => this.player.addShieldCharge(),
       },
+      this.rng,
     );
     this.powerupSystem.start();
 
@@ -271,7 +289,8 @@ export class RaidScene extends Phaser.Scene {
     this.runMods = createDefaultRunMods();
     OperatorSystem.applyOperatorMods(this.runMods);
     this.magnetStormRemaining = 0;
-    this.rng = new Rng(Date.now());
+    // rng was seeded above (mode-dependent); DraftSystem and all subsystems
+    // share the same instance.
     this.draftSystem = new DraftSystem(this.rng);
     this.player.applyRunMods(this.runMods);
     this.weapons.applyRunMods(this.runMods);
@@ -284,7 +303,7 @@ export class RaidScene extends Phaser.Scene {
     bus.on(Events.DRAFT_PICKED, this.onDraftPicked);
 
     MusicEngine.startRaid();
-    bus.emit(Events.RAID_STARTED);
+    bus.emit(Events.RAID_STARTED, this.mode);
   }
 
   // Bus handler bound once in create() so we can off() it on shutdown without
@@ -746,16 +765,16 @@ export class RaidScene extends Phaser.Scene {
     for (let i = 0; i < def.scrapDrop; i++) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
       if (!p) break;
-      p.spawn(ex, ey, 'scrap', valuePerDrop);
+      p.spawn(ex, ey, 'scrap', valuePerDrop, this.rng);
     }
     // Lucky card bonus stacks additively on top of the upgrade-modified base.
     const coreChance = Math.min(
       1,
       UpgradeEffects.coreDropChance(def.coreChance) + this.runMods.coreChanceBonus,
     );
-    if (Math.random() < coreChance) {
+    if (this.rng.next() < coreChance) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
-      if (p) p.spawn(ex, ey, 'core', valuePerDrop);
+      if (p) p.spawn(ex, ey, 'core', valuePerDrop, this.rng);
     }
   }
 
@@ -907,6 +926,14 @@ export class RaidScene extends Phaser.Scene {
     }
     this.updateFtueProgress(state);
 
+    // M19 — daily seed leaderboard. Only successful extracts on a daily-seed
+    // raid count; tutorial and normal raids are filtered out. Score is the
+    // banked Scrap (post-greed multiplier).
+    if (this.mode === 'dailySeed' && state === 'extracted') {
+      const todayIso = todayUtcDateForLeaderboard();
+      void LeaderboardSystem.submitScore(todayIso, scrap);
+    }
+
     // M17 — apply cleanse + maybe-infest. handleRaidEnd mutates the save in
     // place; the persist() below captures everything in one shot.
     const infOutcome = InfestationSystem.handleRaidEnd({
@@ -1032,7 +1059,7 @@ export class RaidScene extends Phaser.Scene {
       const x = this.player.x + Math.cos(angle) * offset;
       const y = this.player.y + Math.sin(angle) * offset;
       const p = this.pickups.get(x, y) as Pickup | null;
-      if (p) p.spawn(x, y, 'scrap', 1);
+      if (p) p.spawn(x, y, 'scrap', 1, this.rng);
     }
   }
 
@@ -1086,7 +1113,7 @@ export class RaidScene extends Phaser.Scene {
       // killsToRestoreMachine threshold.
       if (wasInfested) this.cleanseProgress += 1;
       // Vampiric (drafted): on kill, chance to heal a small amount.
-      if (this.runMods.vampiricChance > 0 && Math.random() < this.runMods.vampiricChance) {
+      if (this.runMods.vampiricChance > 0 && this.rng.next() < this.runMods.vampiricChance) {
         const healed = this.player.heal(this.runMods.vampiricHeal);
         if (healed > 0) this.showPopup(this.player.x, this.player.y - 36, `+${healed}`, '#72ff9f');
       }

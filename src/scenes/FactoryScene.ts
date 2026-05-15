@@ -19,6 +19,8 @@ import { OperatorSystem } from '../systems/OperatorSystem';
 import { InfestationSystem } from '../systems/InfestationSystem';
 import { DailyQuestSystem } from '../systems/DailyQuestSystem';
 import { StreakSystem } from '../systems/StreakSystem';
+import { LeaderboardSystem } from '../systems/LeaderboardSystem';
+import { todayUtcDate } from '../config/QuestDefs';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -62,6 +64,9 @@ export class FactoryScene extends Phaser.Scene {
   private operatorPanelObjects: Phaser.GameObjects.GameObject[] = [];
   // M18 — quest panel handles, rebuilt on claim or raid-return.
   private questPanelObjects: Phaser.GameObjects.GameObject[] = [];
+  // M19 — daily seed deploy button + leaderboard button + leaderboard modal.
+  private dailySeedObjects: Phaser.GameObjects.GameObject[] = [];
+  private leaderboardObjects: Phaser.GameObjects.GameObject[] = [];
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -113,6 +118,7 @@ export class FactoryScene extends Phaser.Scene {
     this.maybeShowInfestationTutorialModal();
     this.buildClearInfestationStub();
     this.buildQuestPanel();
+    this.buildDailySeedAndLeaderboardButtons();
     MusicEngine.startFactory();
   }
 
@@ -223,6 +229,7 @@ export class FactoryScene extends Phaser.Scene {
     this.deployPrompt = null;
     this.destroyOperatorPanel();
     this.destroyQuestPanel();
+    this.destroyDailySeedAndLeaderboard();
   }
 
   // ---- accessors used by HUDScene ----
@@ -962,6 +969,224 @@ export class FactoryScene extends Phaser.Scene {
   private destroyQuestPanel(): void {
     for (const o of this.questPanelObjects) o.destroy();
     this.questPanelObjects = [];
+  }
+
+  // §16.3 daily seed UI: a secondary "DAILY SEED" deploy button next to the
+  // normal pad, plus a "TODAY'S BOARD" button that opens the local leaderboard.
+  // The daily-seed button greys + relabels itself once the player has used
+  // their one attempt today.
+  private buildDailySeedAndLeaderboardButtons(): void {
+    this.destroyDailySeedAndLeaderboard();
+
+    // Gate behind tutorial completion so FTUE players see only the normal
+    // deploy pad and don't get distracted by a secondary launch.
+    if (!saveSystem.get().tutorialDone) return;
+
+    const today = todayUtcDate();
+    const attempted = LeaderboardSystem.hasAttemptedToday(today);
+
+    // Daily seed button — placed under the deploy pad.
+    const btnW = 160;
+    const btnH = 40;
+    const x = this.padX;
+    const y = this.padY + this.padRadius + 56;
+
+    const seedBg = this.add
+      .rectangle(x, y, btnW, btnH, attempted ? 0x444444 : 0xa76cff, attempted ? 0.55 : 1)
+      .setStrokeStyle(2, 0xffffff, attempted ? 0.25 : 0.85)
+      .setDepth(3);
+    this.dailySeedObjects.push(seedBg);
+    const seedLabel = this.add
+      .text(x, y, attempted ? Strings.factoryDailySeedAttempted : Strings.factoryDailySeed, {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: attempted ? '#888888' : '#ffffff',
+      })
+      .setOrigin(0.5)
+      .setDepth(4);
+    this.dailySeedObjects.push(seedLabel);
+    if (!attempted) {
+      const hint = this.add
+        .text(x, y + btnH / 2 + 8, Strings.factoryDailySeedHint, {
+          fontFamily: 'monospace',
+          fontSize: '10px',
+          color: '#a76cff',
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0.5, 0)
+        .setDepth(4);
+      this.dailySeedObjects.push(hint);
+      seedBg.setInteractive({ useHandCursor: true });
+      seedBg.on('pointerdown', () => this.launchDailySeedRaid());
+    }
+
+    // Leaderboard button — top-right corner, viewport-pinned.
+    const lbBtn = this.add
+      .rectangle(this.scale.width - 110, 84, 200, 30, 0x101820, 0.95)
+      .setStrokeStyle(2, 0xa76cff, 0.85)
+      .setScrollFactor(0)
+      .setDepth(2050)
+      .setInteractive({ useHandCursor: true });
+    this.dailySeedObjects.push(lbBtn);
+    const lbLabel = this.add
+      .text(this.scale.width - 110, 84, Strings.leaderboardButton, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#a76cff',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.dailySeedObjects.push(lbLabel);
+    lbBtn.on('pointerdown', () => this.openLeaderboard());
+  }
+
+  private launchDailySeedRaid(): void {
+    LeaderboardSystem.markAttempted(todayUtcDate());
+    void saveSystem.persist();
+    this.scene.start('RaidScene', { tutorial: false, mode: 'dailySeed' });
+  }
+
+  private openLeaderboard(): void {
+    // Toggle: if already open, close it.
+    if (this.leaderboardObjects.length > 0) {
+      this.closeLeaderboard();
+      return;
+    }
+    const w = this.scale.width;
+    const h = this.scale.height;
+
+    const backdrop = this.add
+      .rectangle(0, 0, w, h, 0x000000, 0.7)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3500)
+      .setInteractive();
+    this.leaderboardObjects.push(backdrop);
+    backdrop.on('pointerdown', () => this.closeLeaderboard());
+
+    const panelW = 460;
+    const panelH = 480;
+    const panel = this.add
+      .rectangle(w / 2, h / 2, panelW, panelH, 0x101820, 0.98)
+      .setStrokeStyle(3, 0xa76cff, 0.95)
+      .setScrollFactor(0)
+      .setDepth(3501);
+    this.leaderboardObjects.push(panel);
+
+    this.leaderboardObjects.push(
+      this.add
+        .text(w / 2, h / 2 - panelH / 2 + 24, Strings.leaderboardTitle, {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          color: '#a76cff',
+          stroke: '#000000',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+
+    const entries = LeaderboardSystem.getTopEntries();
+    if (entries.length === 0) {
+      this.leaderboardObjects.push(
+        this.add
+          .text(w / 2, h / 2, Strings.leaderboardEmpty, {
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            color: '#88a0a8',
+          })
+          .setOrigin(0.5)
+          .setScrollFactor(0)
+          .setDepth(3502),
+      );
+    } else {
+      const startY = h / 2 - panelH / 2 + 70;
+      const rowH = 32;
+      const today = todayUtcDate();
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const ry = startY + i * rowH;
+        const rank = String(i + 1).padStart(2, ' ');
+        const dateLabel = e.date === today ? `${e.date} (TODAY)` : e.date;
+        this.leaderboardObjects.push(
+          this.add
+            .text(w / 2 - panelW / 2 + 30, ry, `#${rank}`, {
+              fontFamily: 'monospace',
+              fontSize: '14px',
+              color: '#ffd75a',
+            })
+            .setScrollFactor(0)
+            .setDepth(3502),
+        );
+        this.leaderboardObjects.push(
+          this.add
+            .text(w / 2 - panelW / 2 + 80, ry, dateLabel, {
+              fontFamily: 'monospace',
+              fontSize: '13px',
+              color: '#ffffff',
+            })
+            .setScrollFactor(0)
+            .setDepth(3502),
+        );
+        this.leaderboardObjects.push(
+          this.add
+            .text(w / 2 + panelW / 2 - 110, ry, `${e.score} ${Strings.summaryScrap}`, {
+              fontFamily: 'monospace',
+              fontSize: '13px',
+              color: '#22f6ff',
+            })
+            .setScrollFactor(0)
+            .setDepth(3502),
+        );
+        if (e.isYou) {
+          this.leaderboardObjects.push(
+            this.add
+              .text(w / 2 + panelW / 2 - 40, ry, Strings.leaderboardYou, {
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                color: '#72ff9f',
+              })
+              .setScrollFactor(0)
+              .setDepth(3502),
+          );
+        }
+      }
+    }
+
+    const closeY = h / 2 + panelH / 2 - 36;
+    const closeBg = this.add
+      .rectangle(w / 2, closeY, 140, 36, 0xa76cff, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3502)
+      .setInteractive({ useHandCursor: true });
+    this.leaderboardObjects.push(closeBg);
+    this.leaderboardObjects.push(
+      this.add
+        .text(w / 2, closeY, Strings.leaderboardClose, {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3503),
+    );
+    closeBg.on('pointerdown', () => this.closeLeaderboard());
+  }
+
+  private closeLeaderboard(): void {
+    for (const o of this.leaderboardObjects) o.destroy();
+    this.leaderboardObjects = [];
+  }
+
+  private destroyDailySeedAndLeaderboard(): void {
+    for (const o of this.dailySeedObjects) o.destroy();
+    this.dailySeedObjects = [];
+    this.closeLeaderboard();
   }
 
   // [M20] stub button — disabled but visible so the player understands a

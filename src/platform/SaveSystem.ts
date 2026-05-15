@@ -6,7 +6,7 @@ import { SDKBridge } from './SDKBridge';
 import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -69,6 +69,12 @@ export interface SaveData {
   // M18 — cosmetic shards earned from daily quest claims. The actual
   // cosmetic system lands post-launch; this is just a counter for now.
   cosmeticShards: number;
+  // M19 — daily-seed leaderboard state. dailySeedAttempted is the YYYY-MM-DD
+  // of the last day the player ran the daily-seed raid (one attempt per day);
+  // dailySeedHistory stores the most recent 30 entries so the local
+  // leaderboard panel can render top scores.
+  dailySeedAttempted: string;
+  dailySeedHistory: { date: string; score: number }[];
   tutorialDone: boolean;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
   // tutorial); successfulExtracts only on extract. ftueUnlocks is the
@@ -118,6 +124,8 @@ export function createDefaultSave(): SaveData {
     infestationTutorialSeen: false,
     stats: { runs: 0, extracts: 0, totalScrap: 0, bestRaid: 0, killCount: 0 },
     cosmeticShards: 0,
+    dailySeedAttempted: '',
+    dailySeedHistory: [],
     tutorialDone: false,
     raidsCompleted: 0,
     successfulExtracts: 0,
@@ -226,6 +234,16 @@ function migrateV4toV5(v4: MigratingSave): MigratingSave {
   };
 }
 
+// v5 → v6: M19 adds dailySeedAttempted + dailySeedHistory.
+function migrateV5toV6(v5: MigratingSave): MigratingSave {
+  return {
+    ...v5,
+    version: 6,
+    dailySeedAttempted: typeof v5.dailySeedAttempted === 'string' ? v5.dailySeedAttempted : '',
+    dailySeedHistory: Array.isArray(v5.dailySeedHistory) ? v5.dailySeedHistory : [],
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -243,13 +261,14 @@ function migrate(raw: unknown): SaveData {
   if (save.version === 2) save = migrateV2toV3(save);
   if (save.version === 3) save = migrateV3toV4(save);
   if (save.version === 4) save = migrateV4toV5(save);
+  if (save.version === 5) save = migrateV5toV6(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 5) save = migrateV5toV6(save);
+  //   if (save.version === 6) save = migrateV6toV7(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

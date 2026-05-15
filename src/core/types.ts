@@ -23,9 +23,14 @@ export interface RaidEndPayload {
   machinesRestored?: number;
 }
 
+export type RaidMode = 'tutorial' | 'normal' | 'dailySeed';
+
 export interface RaidInitData {
   // Set by BootScene when !save.tutorialDone, by FactoryScene's deploy pad it's false.
   tutorial?: boolean;
+  // M19 — explicit raid mode. When omitted, falls back to: tutorial→'tutorial',
+  // else 'normal'. Daily-seed mode is set by FactoryScene's daily-seed deploy.
+  mode?: RaidMode;
 }
 
 export interface UpgradeLevels {

@@ -144,6 +144,16 @@ export const Strings = {
   questDamagelessText: 'Survive 60s without damage',
   streakLabel: 'Streak: Day ',
   questRewardToast: 'Quest reward: +100 Scrap, +1 Core, +1 Shard',
+
+  // M19 — daily seed leaderboard.
+  factoryDailySeed: 'DAILY SEED',
+  factoryDailySeedAttempted: 'DAILY DONE',
+  leaderboardButton: "TODAY'S BOARD",
+  leaderboardTitle: "TODAY'S TOP SCORES",
+  leaderboardEmpty: 'No daily attempts yet. Try one!',
+  leaderboardYou: 'YOU',
+  leaderboardClose: 'CLOSE',
+  factoryDailySeedHint: 'Same seed, all players',
 } as const;
 
 export type StringKey = keyof typeof Strings;

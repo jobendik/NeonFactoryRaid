@@ -36,6 +36,10 @@ class DailyQuestSystemImpl {
   private powerupsThisRaid = 0;
   private damagelessSinceElapsed = 0;
   private damageless60FiredThisRaid = false;
+  // M19 — tutorial raids and daily-seed raids don't advance daily quest
+  // progress (per spec). RAID_STARTED carries the mode; this flag suppresses
+  // bumpCounter and the boolean-quest handlers while set.
+  private suppressForRaid = false;
 
   init(): void {
     if (this.inited) return;
@@ -106,10 +110,14 @@ class DailyQuestSystemImpl {
 
   // ---- internals ----
 
-  private onRaidStarted = (): void => {
+  private onRaidStarted = (...args: unknown[]): void => {
     this.powerupsThisRaid = 0;
     this.damagelessSinceElapsed = 0;
     this.damageless60FiredThisRaid = false;
+    // First arg is RaidMode ('tutorial' | 'normal' | 'dailySeed'); fall back
+    // to non-tutorial if undefined for backwards compatibility.
+    const mode = args[0] as string | undefined;
+    this.suppressForRaid = mode === 'tutorial' || mode === 'dailySeed';
   };
 
   private onExtractionComplete = (): void => {
@@ -149,8 +157,10 @@ class DailyQuestSystemImpl {
   };
 
   // For the cumulative quests (extracts / cores / kills), bump progress and
-  // mark completed if threshold reached. Idempotent after completion.
+  // mark completed if threshold reached. Idempotent after completion. Tutorial
+  // and daily-seed raids are suppressed via suppressForRaid.
   private bumpCounter(kind: QuestKind, n: number): void {
+    if (this.suppressForRaid) return;
     const cur = this.getCurrent();
     if (!cur || cur.def.kind !== kind || cur.completed) return;
     const save = saveSystem.get();
@@ -162,6 +172,7 @@ class DailyQuestSystemImpl {
   }
 
   private markBooleanComplete(def: QuestDef): void {
+    if (this.suppressForRaid) return;
     const save = saveSystem.get();
     save.daily.questProgress = def.threshold;
     save.daily.questCompleted = true;

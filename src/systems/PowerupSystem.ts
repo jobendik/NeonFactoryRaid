@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { PowerupDefs, POWERUP_POOL, type PowerupKind } from '../config/PowerupDefs';
 import { Powerup } from '../entities/Powerup';
+import type { Rng } from '../core/Rng';
 
 // PowerupSystem owns:
 //   - field-spawn cadence per §7.5 (first spawn timing, 9-14s random subsequent, cap 10)
@@ -41,6 +42,7 @@ export class PowerupSystem {
   private getPlayerPos: PlayerPositionProvider;
   private opts: PowerupSystemOpts;
   private instants: InstantHandlers;
+  private rng: Rng;
   private spawnTimer = 0;
   private elapsed = 0;
   private active: ActiveEffect[] = [];
@@ -54,11 +56,13 @@ export class PowerupSystem {
     getPlayerPos: PlayerPositionProvider,
     opts: PowerupSystemOpts,
     instants: InstantHandlers,
+    rng: Rng,
   ) {
     this.group = group;
     this.getPlayerPos = getPlayerPos;
     this.opts = opts;
     this.instants = instants;
+    this.rng = rng;
   }
 
   start(): void {
@@ -95,7 +99,7 @@ export class PowerupSystem {
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.countOnField() < Balance.powerups.maxOnField) {
       this.spawnRandom();
-      this.spawnTimer = Phaser.Math.FloatBetween(
+      this.spawnTimer = this.rng.range(
         Balance.powerups.spawnIntervalMin,
         Balance.powerups.spawnIntervalMax,
       );
@@ -116,13 +120,13 @@ export class PowerupSystem {
   }
 
   private spawnRandom(): void {
-    const kind = POWERUP_POOL[Math.floor(Math.random() * POWERUP_POOL.length)];
+    const kind = this.rng.pick(POWERUP_POOL);
     this.spawnAt(kind);
   }
 
   private spawnAt(kind: PowerupKind): void {
     const player = this.getPlayerPos();
-    const angle = Math.random() * Math.PI * 2;
+    const angle = this.rng.next() * Math.PI * 2;
     const r = Balance.powerups.spawnRadius;
     const wb = Balance.player.worldBounds;
     const margin = 60;

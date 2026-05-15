@@ -3,6 +3,7 @@ import { Balance } from '../config/Balance';
 import { Enemy } from '../entities/Enemy';
 import { sfxShoot } from '../audio/sfx';
 import type { RunMods } from './RunMods';
+import type { Rng } from '../core/Rng';
 
 // Auto-aim weapon per blueprint §6.3: targets the nearest active enemy within
 // (baseRange + rangePerDamage * damageLevel) px, fires at Balance.weapon.baseFireCooldown.
@@ -31,6 +32,7 @@ export class WeaponSystem {
   private scene: Phaser.Scene;
   private getPlayer: PlayerPositionProvider;
   private getEnemies: EnemyListProvider;
+  private rng: Rng;
   private fireTimer = 0;
   private damageLevel = 0;
   private damageMult = 1;
@@ -46,10 +48,11 @@ export class WeaponSystem {
   private modCritMult = 3;
   private modBonusTargets = 0;
 
-  constructor(scene: Phaser.Scene, getPlayer: PlayerPositionProvider, getEnemies: EnemyListProvider) {
+  constructor(scene: Phaser.Scene, getPlayer: PlayerPositionProvider, getEnemies: EnemyListProvider, rng: Rng) {
     this.scene = scene;
     this.getPlayer = getPlayer;
     this.getEnemies = getEnemies;
+    this.rng = rng;
   }
 
   setDamageLevel(level: number): void {
@@ -109,7 +112,7 @@ export class WeaponSystem {
     const hits: WeaponHit[] = [];
     for (const t of targets) {
       this.fireTracer(t.x, t.y);
-      const crit = this.modCritChance > 0 && Math.random() < this.modCritChance;
+      const crit = this.modCritChance > 0 && this.rng.next() < this.modCritChance;
       const damage = crit ? baseDamage * this.modCritMult : baseDamage;
       hits.push({ target: t, damage, crit });
     }

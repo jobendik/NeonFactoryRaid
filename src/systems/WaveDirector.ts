@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Enemy } from '../entities/Enemy';
 import type { EnemyKind } from '../config/EnemyDefs';
+import type { Rng } from '../core/Rng';
 
 // Spawn director per blueprint §7.2:
 //   - Spawn cooldown ramps from 0.95s -> 0.24s as the raid progresses (intensity 0..1).
@@ -32,6 +33,7 @@ export interface WaveDirectorOpts {
 export class WaveDirector {
   private group: Phaser.GameObjects.Group;
   private getPlayerPos: PlayerPositionProvider;
+  private rng: Rng;
   private spawnTimer = 0;
   private elapsed = 0;
   private active = false;
@@ -50,9 +52,10 @@ export class WaveDirector {
   private infestationWave = false;
   private infestSpawnTimer = 0;
 
-  constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider) {
+  constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider, rng: Rng) {
     this.group = group;
     this.getPlayerPos = getPlayerPos;
+    this.rng = rng;
   }
 
   start(opts?: WaveDirectorOpts): void {
@@ -131,7 +134,7 @@ export class WaveDirector {
     const tankRush = Balance.raid.greedEscalation[this.greedStep].tankRushFactor;
     const gruntShare = Math.max(0.05, w.grunt - tankRush);
     const tankShare = w.tank + tankRush;
-    const r = Math.random();
+    const r = this.rng.next();
     let acc = gruntShare;
     if (r < acc) return 'grunt';
     acc += w.swarmer;
@@ -146,7 +149,7 @@ export class WaveDirector {
 
   private spawnOne(kindOverride?: EnemyKind): void {
     const player = this.getPlayerPos();
-    const angle = Math.random() * Math.PI * 2;
+    const angle = this.rng.next() * Math.PI * 2;
     const dist = Balance.enemies.spawnDistance;
     const wb = Balance.player.worldBounds;
     const margin = 24;
@@ -155,7 +158,7 @@ export class WaveDirector {
 
     const enemy = this.group.get(x, y) as Enemy | null;
     if (!enemy) return;
-    enemy.spawn(x, y, kindOverride ?? this.pickKind(), this.enemyHpMult);
+    enemy.spawn(x, y, kindOverride ?? this.pickKind(), this.enemyHpMult, this.rng);
   }
 
   private countActive(): number {
