@@ -174,6 +174,20 @@ export const Balance = {
     telegraphAlpha: 0.75,
     telegraphWidth: 2,
   },
+  extraction: {
+    padX: 520,
+    padY: 340,
+    padRadius: 64,
+    momentDurationSec: 1.5,
+    momentFreezeSec: 0.15,
+    momentFlashMaxScale: 24,
+    momentFlashDurationMs: 700,
+    momentRingMaxScale: 9,
+    momentRingDurationMs: 800,
+    flyInSpeed: 1600,
+    waypointEdgeMargin: 50,
+    waypointSize: 22,
+  },
 } as const;
 
 export type BalanceConfig = typeof Balance;

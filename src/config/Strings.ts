@@ -7,6 +7,19 @@ export const Strings = {
   fps: 'FPS',
   comboLabel: 'COMBO',
   timerLabel: 'TIME',
+  extractionOpened: 'EXTRACTION OPEN',
+  extractionHold: 'HOLD',
+  summaryExtracted: 'EXTRACTION COMPLETE',
+  summaryFailed: 'RAID FAILED',
+  summaryCollapsed: 'TIME COLLAPSED',
+  summaryScrap: 'SCRAP',
+  summaryCores: 'CORES',
+  summaryFactory: 'FACTORY',
+  summaryRedeploy: 'ONE MORE RAID',
+  summaryDoubleLoot: 'DOUBLE LOOT  [M20]',
+  factoryStubTitle: 'FACTORY',
+  factoryStubSub: 'Factory hub — Milestone 8',
+  factoryDeploy: 'DEPLOY',
 } as const;
 
 export type StringKey = keyof typeof Strings;

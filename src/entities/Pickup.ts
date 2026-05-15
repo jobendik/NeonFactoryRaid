@@ -28,9 +28,9 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.body_.enable = false;
   }
 
-  spawn(x: number, y: number, type: PickupType): void {
+  spawn(x: number, y: number, type: PickupType, value = 1): void {
     this.type = type;
-    this.value = 1;
+    this.value = Math.max(1, value);
     this.setTexture(type === 'scrap' ? SCRAP_TEXTURE_KEY : CORE_TEXTURE_KEY);
     this.setPosition(x, y);
     this.body_.enable = true;
@@ -42,6 +42,18 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     const speed = Phaser.Math.Between(Balance.magnet.popOutSpeedMin, Balance.magnet.popOutSpeedMax);
     this.body_.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
     this.body_.setDrag(Balance.magnet.popOutDrag, Balance.magnet.popOutDrag);
+  }
+
+  // Used by the extraction "moment": every active pickup beelines to the player
+  // at flyInSpeed, ignoring magnet radius.
+  flyIn(playerX: number, playerY: number, speed: number): void {
+    if (!this.active) return;
+    const dx = playerX - this.x;
+    const dy = playerY - this.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= 0.5) return;
+    this.body_.setDrag(0, 0);
+    this.body_.setVelocity((dx / d) * speed, (dy / d) * speed);
   }
 
   kill(): void {

@@ -3,6 +3,13 @@
 
 export type GameMode = 'factory' | 'raid';
 
+export type RaidEndState = 'extracted' | 'failed' | 'collapsed';
+
+export interface RaidEndPayload {
+  endState: RaidEndState;
+  loot: { scrap: number; cores: number };
+}
+
 export interface UpgradeLevels {
   gen: number;
   drone: number;
