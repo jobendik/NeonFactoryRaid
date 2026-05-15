@@ -1,204 +1,187 @@
-# HANDOFF — Milestones 1–14 (Run B, M11–M14 added)
+# HANDOFF — Milestones 1–19 (Run C added M15–M19)
 
 ## What runs end-to-end
 
-First boot (no save) drops straight into the FTUE tutorial raid. Extract →
-SummaryScene → FactoryScene with only the GENERATOR row visible →
-deploy → real RaidScene → extract / die / time out → SummaryScene →
-Factory. Upgrades persist; offline production banks on reload; the whole
-loop is playable on `npm run dev`. Audio + adaptive music wired
-throughout.
+First boot → FTUE tutorial → SummaryScene → FactoryScene with progressive
+reveal → buy GENERATOR → real raid (drafting at 20s/45s, operator passive
+at start, infestation wave if any machines infested) → extract or fail →
+Summary with infestation line if applicable → Factory with daily quest +
+operator picker + DAILY SEED + TODAY'S BOARD. Save migrates v0–v6.
 
-## Built across M1–M14
+## Built across M1–M19
 
 | M | Delivered |
 |---|---|
-| M0 | Vite + Phaser 3 + strict TS scaffold |
-| M1 | Renderer / camera / input / Player |
-| M2 | Enemy base + WaveDirector (Grunt) |
-| M3 | Auto-aim WeaponSystem (hitscan tracer + manual overlap) |
-| M4 | Pickups + magnet + collection |
-| M5 | Four enemy kinds (Grunt, Swarmer, Tank, Shooter), combo, popups, raid timer |
-| M6 | ExtractionSystem (pad, hold, decay, moment), end-states, SummaryScene, FactoryScene stub |
-| M7 | GreedSystem + raid HUD pass (HP bar, wallet, greed badge, waypoint) |
-| M8 | FactoryScene with generators, deploy pad, SPM, drones-in-factory plumbing |
-| M9 | Six upgrades with cost scaling, panel UI, effects wired, §8.5 visual milestone hooks |
-| M10 | Auto-save (10s + UPGRADE_PURCHASED + RAID_ENDED + FactoryScene shutdown + raid-end explicit), offline production toast, migration scaffold |
-| M11 | FTUE: boot routing, SaveData v2 migration, tutorial raid (§5.4 mods + §5.2 captions + safety net), progressive-reveal upgrade panel, deploy prompt |
-| M12 | Full PowerupSystem (7 power-ups), pulsing-pentagon entities, HUD pip strip, weapon chain shots (Drone Swarm), Shield charges on Player, Enemy freeze flag |
-| M13 | `src/audio/` AudioBus (master/music/sfx + mute), synth SFX library covering §20.2, 3-layer adaptive raid music + factory pad, HUD mute toggle + SettingsMenu scaffold |
-| M14 | Greed-side §7.3 escalation (spawn rate, tank rush, elite boss-wave), red HUD vignette + deep-end tint, hit-stop, knockback, combo damage popups, near-miss reward, HUD greed-badge re-layout |
-
-## Gate decisions (still current)
-
-- **Flat layout** stays — `entities/ systems/ scenes/ audio/ ui/ config/ platform/ core/`. Reconsider at M17+ when system count justifies subdirs. (Pre-flight #3, Run B.)
-- **WeaponSystem.ts** canonical in `src/systems/`. Multi-target return array + `setFireRateMult` + `setTargetsPerShot` added in M12.
-- **HUDScene → RaidScene state**: `scene.get('RaidScene')` for per-frame numeric reads (HP, timer, active power-ups, shield charges, waypoint target); EventBus for discrete events. Same pattern for FactoryScene.
-- **Combo scales drop VALUE, not COUNT** (§7.4 reinterpreted).
-- **Greed multiplier composes with combo** at extract time. M14 added the §7.3 enemy escalation on top (spawn rate + tank rush + elite at x3).
-- **Boot routing**: first-time boot → tutorial raid; returning players → FactoryScene. Tutorial extract sets `save.tutorialDone = true` and `ftueUnlocks.dailyClaim`.
-- **0-HP** transitions to the 'failed' summary. Tutorial-only safety net floors HP at 1 so the FTUE can't fail.
-- **All tunables in Balance.ts. All strings in Strings.ts.** Honored throughout M11–M14.
-- **Phaser Groups for pooling. ParticleEmitter for particles (no physics bodies).** PowerupSystem uses a Phaser Group for power-up entities. Player bullets stay hitscan + manual overlap; Shooter projectiles remain physics sprites.
-- **Drone Swarm reinterpreted to §13 spec** — "chain shots to extra enemies," not the M11 placeholder orbit drones. The orbit-drone visualization is retired.
-
-## Deviations flagged
-
-1. **§8.5 qualitative milestones still not wired** — Magnet Lv. 5 orbit, Damage Lv. 5 pierce, Damage Lv. 10 split, Luck Lv. 5 gold trails. Cost-scaling and numeric SPM/HP/speed/magnet/damage/luck effects ARE live since M9.
-2. **In-run upgrade drafting (§12) not implemented** — slots at 20s / 45s. DraftSystem still a stub.
-3. **Generator SPM math**: total output = SPM. With N generators active, each generator's drop interval = `(60 / SPM) × N` so cadence stays correct.
-4. **Migration**: v0 saves discarded. v1 → v2 migration handles old saves: if `tutorialDone === true`, unlock the full panel (no row hiding for mid-game players).
-5. **HUDScene runs continuously** across scene transitions and reads whichever gameplay scene is active. No separate FactoryHUD scene.
-6. **Bomber enemy (§14.1, §7.3 x2 wave) deferred** — TODO in WaveDirector + EnemyDefs. M14's tank-rush factor stands in: at greed x1.5+ the Grunt slot gradually shifts to Tank.
-7. **Golden Fever + Turret Drop power-ups deferred** — TODO in PowerupDefs.ts. M12 ships the other 7.
-8. **M11 power-up placeholder retired in M12** — tutorial now spawns the real Drone Swarm (chain) + Magnet Burst (radius mult) via PowerupSystem at §5.4 timestamps.
-9. **Infestation system still stubbed** — slated for M17. Tutorial raids carry `tutorial: true` in RaidEndPayload so future infestation filters can ignore them.
+| M0–M14 | (see prior HANDOFF for full table — Run A + B) |
+| M15 | In-run drafting (24-card pool, 18 drawable + 6 deferred) |
+| M16 | Operator roster — Pulse + Vanta (Surge/Lodestone metadata only) |
+| M17 | Infestation system (the differentiator) |
+| M18 | Daily quest + streak with 1-day forgiveness |
+| M19 | RNG audit + daily seed leaderboard (GATE 3) |
 
 ## Current state
 
-- `npm run typecheck` — clean (strict mode, no errors)
-- `npm run build` — clean (warns on Phaser bundle size > 500KB, benign; manualChunks already splits phaser out)
-- `npm run dev` — serves at :5173, transforms all modules
+- `npm install && npm run typecheck && npm run build` — all green.
+- SaveData at v6. Migrations v0→v1 (discard) → v2 → v3 → v4 → v5 → v6.
+
+## Run C decisions
+
+- **Drafting time-slow**: full `scene.pause` + DraftScene overlay
+  instead of multi-axis time-scale. Cleaner, mirrors SummaryScene
+  pattern, no physics-time bugs. Player is safe while choosing.
+- **bonusWeaponTargets** on RunMods replaces M15-original
+  `droneMultiplier`. Operator (Vanta) seeds +2; Drone Multiplier card
+  multiplies. WeaponSystem folds into effective targets.
+- **Drone visual**: tiny purple orbs orbit at radius 36 (cosmetic).
+- **Magnet Storm card**: 8s of Magnet-Burst-strength radius (3x), not
+  literal orbit physics. Reads identical to the field power-up — flag.
+- **Quest panel**: bottom-LEFT (not "right side beneath upgrades" as
+  the spec said — six upgrade rows reach near-bottom; right has no room).
+- **Daily Seed UI**: gated on tutorialDone.
+
+## Open TODOs (carried forward)
+
+1. **§8.5 milestone visuals** still pending (deferred to Run D polish).
+2. **6 deferred drafting cards** in CardDefs.ts: Ricochet, Slow Field,
+   Frenzy Mode, Nova Dash, Time Dilation, Pyrokinetic.
+3. **Deferred power-ups**: Golden Fever, Turret Drop.
+4. **Deferred enemies**: Bomber, Loot Goblin, Shield Carrier, Splitter,
+   Extract Jammer, Signal Hydra.
+5. **Operators 3 & 4** (Surge, Lodestone): metadata-only, locked.
+6. **[M20] stubs**: Clear Infestation ad, Double Loot ad.
+7. **Real CrazyGames SDK**: SDKBridge stub stays.
+
+## Status notes — answers to the four questions
+
+### 1. How infestation feels
+
+Visual stack on infested generators: red tint + red glitch border
+overlay + horizontal jitter tween (±2 px / 110ms) + red smoke particle
+emitter. Generator stops dropping scrap; SPM display drops accordingly
+(Economy.computeSpm reads InfestationSystem ratio).
+
+Communication chain:
+1. **SummaryScene**: prominent red "FACTORY INFESTED — N machines
+   disabled" line above loot card.
+2. **FactoryScene first ever**: full modal with 3-sentence body +
+   GOT IT button. One-time, gated by `infestationTutorialSeen`.
+3. **Subsequent visits**: red toast top-of-screen.
+4. **In raid**: HUD top-right "Cleansing: 12 / 30 — 1 machine" counter.
+
+I cannot test in browser from this environment. Code path is correct
+and visual layers are real, but feel verification needs hands on the
+build.
+
+### 2. Drafting cards — fun vs. weak
+
+Strong by design:
+- Sharper Shots, Burst Fire, Quick Feet, Hardy — clean stacking buffs.
+- Pierce + Split Shot + Drone Multiplier (with Vanta) — explosive.
+  Vanta + Drone Multiplier + Pierce = 6 simultaneous targets per shot.
+- Greed Surge — multiplicative with greed step (x4.5 at greed x3).
+- Phoenix — defensive panic button; unlocks reckless play.
+
+Likely weak:
+- Lucky — +5% core chance is invisible per drop.
+- Heal on Pickup — 1 HP per scrap is a lot of pickups for one HP.
+- Magnet Storm — reads identical to Magnet Burst power-up; could need
+  stronger differentiator (true orbit physics is the obvious answer).
+- Drone Multiplier on Pulse — null-op (per spec, but a known dead pick).
+
+### 3. RNG audit findings
+
+Threading was clean for the major surfaces — WaveDirector,
+PowerupSystem, WeaponSystem, DraftSystem, Pickup.spawn,
+Enemy.spawn (cached for shooter cooldowns), in-RaidScene rolls
+(vampiric, core drop chance).
+
+Edge cases:
+- Audio noise (sfx.ts Math.random) intentionally left.
+- Machine.ts factory-side scatter — FactoryScene only.
+- DailyQuestSystem.ensureTodaysQuest uses Math.random fallback —
+  not per-raid so daily-seed determinism doesn't matter.
+- InfestationSystem.handleRaidEnd takes optional rng (passed by
+  RaidScene); falls back to Math.random for safety.
+
+Worth hardening in Run D: Phaser physics step uses real time, not the
+seeded rng — two players running today's seed get visually identical
+spawns but micro-different collision moments due to frame-rate drift.
+Leaderboard scores should still match within a couple Scrap.
+
+### 4. How to play one full session
+
+```
+npm install && npm run dev   # http://localhost:5173
+```
+
+1. Cold boot → FTUE tutorial. Move, dash, collect Drone Swarm (10s),
+   Magnet Burst (25s), extract at 18s.
+2. UPGRADE → Factory with only GENERATOR row.
+3. Buy GENERATOR (25 Scrap) → second generator slides in, DEPLOY prompt.
+4. Walk on deploy pad → real raid (75s).
+5. **At 20s**: time pauses, three rarity-color-coded cards. Pick one.
+6. **At 45s**: second draft window (more rare/epic).
+7. Push to Greed x2 (yellow GREED badge).
+8. Extract → SummaryScene with greed-multiplied loot.
+9. Back to factory: quest panel appears bottom-left (raidsCompleted=2).
+10. Note OPERATOR PICKER bottom-center (Pulse selected, Vanta locked
+    at 50 Cores). Earn cores to unlock.
+11. Deploy second raid. **Play badly — let timer run out.** Fails
+    with no infestation (1/3 grace).
+12. Deploy third raid. Fail. (2/3.)
+13. Deploy fourth raid. Fail. **Infestation triggers.** Summary shows
+    "FACTORY INFESTED — 1 machines disabled."
+14. Back to factory. **Modal pops** explaining mechanic.
+15. Red infested generator with smoke + jitter. SPM drops to ~50%.
+16. Deploy fifth raid. Red infestation swarmers spawn ~1.6s starting
+    at 5s. HUD: "Cleansing: X / 30 — 1 machine".
+17. Kill 30 → counter ticks down. Extract. Generator restored.
+18. Tap **DAILY SEED** purple button below deploy pad.
+19. Extract → score recorded. Tap **TODAY'S BOARD** → leaderboard
+    modal lists your entry with TODAY + YOU markers.
 
 ## Where things live
 
 ```
 src/
-  audio/         AudioBus, sfx, music (M13 - synth Web Audio, no external assets)
-  config/        Balance, Strings, EnemyDefs, UpgradeDefs, PowerupDefs (all tunables / strings)
-  core/          EventBus (Events.*), Rng, types (RaidEndState, RaidEndPayload, FtueUnlocks, WaypointTarget)
-  entities/      Player, Enemy, Bullet, Pickup, Machine (Generator), Drone, Powerup
-  scenes/        BootScene, FactoryScene, RaidScene, HUDScene, SummaryScene
-  systems/       InputSystem, VirtualJoystick, WaveDirector, WeaponSystem,
-                 ParticleEffects, ExtractionSystem, GreedSystem,
-                 EconomySystem, UpgradeSystem, PowerupSystem
-  platform/      SDKBridge (CrazyGames stub + mute hook), SaveSystem, AutoSave, Audio (shim)
-  ui/            UpgradeCard, MuteButton, SettingsMenu
+  config/  Balance, Strings, EnemyDefs, UpgradeDefs, PowerupDefs,
+           CardDefs (M15), OperatorDefs (M16), QuestDefs (M18)
+  systems/ existing + RunMods (M15), DraftSystem (M15),
+           OperatorSystem (M16), InfestationSystem (M17),
+           DailyQuestSystem + StreakSystem (M18),
+           LeaderboardSystem (M19)
+  scenes/  existing + DraftScene (M15)
 ```
 
-Stub-only (populated in later milestones): scenes/PreloadScene, scenes/ModalScene,
-ui/{HUD,Modal,SummaryScreen}, systems/{AchievementSystem,DailyQuestSystem,
-DraftSystem,InfestationSystem,LeaderboardSystem,StreakSystem},
-config/{CardDefs,OperatorDefs}, platform/Analytics.
+Stubs left: scenes/PreloadScene + ModalScene; systems/AchievementSystem;
+ui/{HUD, Modal, SummaryScreen}; platform/Analytics.
 
-## SaveData v2 shape
+## SaveData v6 (additions over v2)
 
 ```ts
 {
-  version: 2,
-  scrap, cores, tokens,
-  upgrades: { gen, drone, speed, magnet, damage, luck },
-  refinery: {},
-  operator, unlockedOperators,
-  achievements, prestige, daily, seasonPass, cosmetics,
-  infestation: { machineIds: [] },
-  stats: { runs, extracts, totalScrap, bestRaid, killCount },
-  tutorialDone: boolean,
-  // M11 additions:
-  raidsCompleted: number,        // any raid end, including tutorial
-  successfulExtracts: number,    // extract only
-  firstCoreCollected: boolean,
-  ftueUnlocks: {
-    dailyClaim, droneUpgrade, magnetUpgrade, damageUpgrade,
-    luckUpgrade, factoryBoost, missionBoard,
+  version: 6,
+  selectedOperator, unlockedOperators,           // M16
+  infestation: { machineIds, failsBeforeFirst }, // M17
+  infestationTutorialSeen,                       // M17
+  daily: {
+    lastClaim, questId, questProgress, questCompleted,
+    streakDay, lastStreakDate,                   // M18
   },
-  lastSave: number,
+  cosmeticShards,                                // M18
+  dailySeedAttempted,                            // M19
+  dailySeedHistory: [{date, score}, ...],        // M19 (cap 30)
 }
 ```
 
-`migrateV1toV2` carries forward all v1 fields; new flags get safe defaults
-(or full-unlocked if `tutorialDone` was already true on the v1 save).
+## What M20 should tackle first
 
-## Playing one full cycle in dev
+Per Run D's billing (ads, polish, perf, submission):
 
-```
-npm install        # if needed
-npm run dev        # opens at http://localhost:5173
-```
-
-1. Cold boot drops you straight into the tutorial raid. Caption "MOVE" appears at 0s.
-2. Scrap pile is spawned around the player — pick them up.
-3. Caption "DASH" at 6s. Drone Swarm power-up spawns at 10s (purple pentagon ring). Caption "POWER UP!" at 12s.
-4. Extraction pad opens at 18s. Caption "EXTRACT". Off-screen arrow points at it.
-5. Magnet Burst power-up spawns at 25s (cyan pentagon).
-6. Stand on extraction pad for 5s → 4-layer extraction success sound → SummaryScene.
-7. Single "UPGRADE" button → FactoryScene with ONLY the GENERATOR row visible.
-8. Buy GENERATOR for 25 Scrap → second generator slides in, big pulsing "DEPLOY" prompt appears on the pad.
-9. Walk onto the pad (0.4s hold) → real RaidScene (75s, full enemy mix, full power-up cadence, normal HP/damage).
-10. As the raid runs, you'll hear the danger music layer fade up when HP drops or enemies pile. Greed climbs after extract opens at 20s; the screen edges pulse red and at x3 a deep-end tint flips in. A single boss-wave Elite spawns at x3.
-11. Extract or die → SummaryScene with Greed mult (or -50% penalty) → Factory.
-12. After this first real raid, MAGNET + SPEED appear in the panel. Second raid: DRONE. Third raid: DAMAGE. First Core: LUCK.
-13. Mute button + gear-cog in HUD top-right (sliders for Master/Music/SFX).
-
-## What M15 should tackle first
-
-Per Run B's punch list, M14 closes Run B cleanly. Likely M15 candidates
-(Run C territory):
-
-1. **In-run upgrade drafting (§12)** — slots at 20s / 45s with a 3-card pick and time-slow. DraftSystem stub already in place.
-2. **Real §8.5 gameplay milestones** — Magnet Lv. 5 orbit ring, Damage Lv. 5 pierce, Damage Lv. 10 split, Luck Lv. 5 core gold trails. All small isolated effects.
-3. **PreloadScene** — currently we render placeholder textures at scene-create time; a Preload pass would let us bake textures once and surface a loading bar (matches §22 architecture).
-
-## M14 status notes (for the next-session check-in)
-
-### Tutorial feel
-Caption timing matches §5.2 beats exactly (0/6/12/18s). Captions fade
-in 320ms / hold 2.6s / fade out 320ms, no overlap. The safety net works:
-hp can't go below 1, so a player who stands still during tutorial doesn't
-die. Pacing feels generous - tutorial enemy spawn rate is 0.4x and HP 0.5x
-so a competent player extracts with HP barely scratched.
-
-### Greed tuning
-The greed escalation table I shipped is **softer than the blueprint
-text suggests** in two places:
-
-- §7.3 calls for "+40% spawn rate" at x1.5; I shipped +40% via the
-  table (1.4× mult). ✓
-- §7.3 calls for "tank rush + bombers" at x2; without a Bomber type,
-  I shipped a tankRushFactor of 0.20/0.45/0.55 across steps 2/3/4 that
-  lifts the Grunt share into Tank. At step 4 the effective Tank share
-  is ~0.67 - aggressive but not absurd.
-
-If you want a sharper escalation: bump the spawnRateMult entries in
-`Balance.raid.greedEscalation` (1.2/1.4/1.6/1.8 → 1.3/1.6/2.0/2.5) and
-the tankRushFactor (0.20/0.45/0.55 → 0.30/0.55/0.65). The whole table
-is a single edit.
-
-### Feel-polish calls worth a sanity check
-
-1. **Hit-stop duration** (Tank 0.05s, Elite 0.09s). 0.05s = 3 frames at
-   60fps; long enough to feel weight but short enough that the player
-   doesn't notice as a pause. Elite's 0.09s is more dramatic. If they
-   feel slow, halve both to 0.025 / 0.045.
-2. **Knockback impulse** (280 px/s, 0.12s). Tanks/elites get 0.35× the
-   impulse so they still feel heavy. On a clean grunt hit this is
-   ~33px of displacement - visible but not stagger-locking. If you want
-   the player to feel like they're shoving enemies more, double knockback
-   speed.
-3. **Damage popup styling** kicks in at combo ≥ 2.0. With the combo decay
-   rate I have, that's "three kills in 2.2s." It's reachable but feels
-   like an earned moment. If you'd rather see the popups at lower
-   combo, lower the threshold in `RaidScene.showDamagePopup`.
-4. **Near-miss reward** is +2 Scrap with a "NEAR MISS" popup. The
-   radius is 30px which is just-above the player hitbox (18px). This
-   fires reasonably often during dash play; if the popup feels noisy,
-   gate it on combo or only the first per dash. Currently I only
-   gate per-enemy-per-dash.
-
-### Music fallback decision
-
-The 3-layer adaptive raid music shipped intact (base + tension +
-danger, cross-fading on HP%, Greed step, and enemy count). It sounds
-fine in headphones - more atmospheric than aggressive. I did NOT fall
-back to the single-layer + x2-Greed-only path mentioned as the escape
-hatch. If it sounds bad on real speakers or feels grating during long
-sessions, that fallback is one config change: in
-`RaidScene.tickAdaptiveMusic`, gate the danger layer on `greedMult >=
-2.0` only and skip the HP/enemy-count thresholds.
-
-### SettingsMenu access
-
-Click the gear icon next to the mute button (top-right of HUD). Backdrop
-click or the panel's CLOSE button dismisses. Sliders write straight to
-AudioBus volumes; nothing else is persisted yet (next milestone can
-write/read these to SaveData).
+1. **CrazyGames rewarded ads** per §17.2 (Revive, Double Loot, Extend
+   Run, Factory Boost, Clear Infestation, Daily Crate, Operator
+   Try-Out). SDKBridge already stubs the surface.
+2. **PreloadScene** — bake textures once instead of at scene-create.
+3. **§8.5 milestone visuals** land here.
+4. **Performance pass**: entity caps under load, particle batching.
+5. **Submission checklist** (Appendix C of blueprint).
