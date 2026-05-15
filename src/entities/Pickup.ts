@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import type { Rng } from '../core/Rng';
 
 export type PickupType = 'scrap' | 'core';
 
@@ -28,7 +29,7 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.body_.enable = false;
   }
 
-  spawn(x: number, y: number, type: PickupType, value = 1): void {
+  spawn(x: number, y: number, type: PickupType, value = 1, rng: Rng | null = null): void {
     this.type = type;
     this.value = Math.max(1, value);
     this.setTexture(type === 'scrap' ? SCRAP_TEXTURE_KEY : CORE_TEXTURE_KEY);
@@ -38,8 +39,10 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.setAlpha(1);
     this.age = 0;
 
-    const angle = Math.random() * Math.PI * 2;
-    const speed = Phaser.Math.Between(Balance.magnet.popOutSpeedMin, Balance.magnet.popOutSpeedMax);
+    const angle = rng ? rng.next() * Math.PI * 2 : Math.random() * Math.PI * 2;
+    const speed = rng
+      ? rng.int(Balance.magnet.popOutSpeedMin, Balance.magnet.popOutSpeedMax)
+      : Phaser.Math.Between(Balance.magnet.popOutSpeedMin, Balance.magnet.popOutSpeedMax);
     this.body_.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
     this.body_.setDrag(Balance.magnet.popOutDrag, Balance.magnet.popOutDrag);
   }

@@ -57,6 +57,8 @@ export const Events = {
   ACHIEVEMENT_UNLOCKED: 'achievement:unlocked',
   SAVE_LOADED: 'save:loaded',
   SAVE_PERSISTED: 'save:persisted',
+  OPERATOR_SELECTED: 'operator:selected',
+  OPERATOR_UNLOCKED: 'operator:unlocked',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events];

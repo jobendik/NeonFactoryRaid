@@ -3,6 +3,7 @@ import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
+import type { RunMods } from '../systems/RunMods';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
 
@@ -31,6 +32,16 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // first - if a charge absorbed the hit, the player takes no HP damage.
   shieldCharges = 0;
   private shieldAura: Phaser.GameObjects.Graphics | null = null;
+  // M15 RunMods inputs. Cards mutate RunMods on RaidScene; the player calls
+  // applyRunMods to refresh derived values (max HP / speed / dash cooldown)
+  // and to seed Orbital Shield + Phoenix flags.
+  private speedMult = 1;
+  private dashCooldownMult = 1;
+  private bonusHP = 0;
+  private orbitalShieldEnabled = false;
+  private orbitalShieldRegenSec = 12;
+  private orbitalShieldTimer = 0;
+  phoenixCharges = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Player.ensureTexture(scene);
@@ -75,6 +86,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.invulnTimer = Math.max(0, this.invulnTimer - dt);
     this.hitInvulnTimer = Math.max(0, this.hitInvulnTimer - dt);
 
+    // Orbital Shield (drafted card): a passive regenerator that grants one
+    // shield charge every N seconds, capped at 1 outstanding from this source
+    // (chained Shield Bubble pickups can stack on top).
+    if (this.orbitalShieldEnabled) {
+      this.orbitalShieldTimer += dt;
+      if (this.orbitalShieldTimer >= this.orbitalShieldRegenSec && this.shieldCharges < 1) {
+        this.orbitalShieldTimer = 0;
+        this.shieldCharges += 1;
+        this.refreshShieldAura();
+      }
+    }
+
     if (input.dash && this.dashCooldownTimer <= 0 && this.dashTimer <= 0) {
       this.startDash(input);
     }
@@ -108,7 +131,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.vy = dy * Balance.player.dashForce;
     this.dashTimer = Balance.player.dashDuration;
     this.invulnTimer = Balance.player.dashInvuln;
-    this.dashCooldownTimer = Balance.player.dashCooldown;
+    // Dash Master card multiplies cooldown (×0.7 per stack).
+    this.dashCooldownTimer = Balance.player.dashCooldown * this.dashCooldownMult;
     this.setTint(Balance.colors.playerDashAccent);
     this.scene.time.delayedCall(Balance.player.dashDuration * 1000, () => this.clearTint());
     this.scene.cameras.main.shake(Balance.ui.dashShakeDuration, Balance.ui.dashShakeIntensity);
@@ -133,13 +157,52 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   // Re-reads max HP and speed from current upgrade levels. Used by FactoryScene
   // when an upgrade is purchased mid-session so the player feels the change
-  // without having to redeploy.
+  // without having to redeploy. Also re-applies the current RunMods so a
+  // mid-raid card pick keeps the bonusHP / speedMult intact.
   refreshFromUpgrades(): void {
-    const newMax = UpgradeEffects.playerMaxHp();
+    const newMax = UpgradeEffects.playerMaxHp() + this.bonusHP;
     if (newMax > this.maxHp) this.hp += newMax - this.maxHp;
     this.maxHp = newMax;
     if (this.hp > this.maxHp) this.hp = this.maxHp;
-    this.speed = UpgradeEffects.playerSpeed();
+    this.speed = UpgradeEffects.playerSpeed() * this.speedMult;
+  }
+
+  // Applies RunMods derived from drafted cards (and, in M16, operator passives).
+  // Should be called after construction with the run's current mods, then again
+  // any time mods change (e.g. after a draft pick during a raid).
+  applyRunMods(mods: RunMods): void {
+    this.speedMult = mods.speedMult;
+    this.dashCooldownMult = mods.dashCooldownMult;
+    const oldBonus = this.bonusHP;
+    this.bonusHP = mods.bonusHP;
+    // Bonus HP additively raises max; pick-up grants top up current HP by the
+    // delta so a Hardy mid-raid feels generous.
+    const delta = this.bonusHP - oldBonus;
+    if (delta > 0) {
+      this.maxHp += delta;
+      this.hp = Math.min(this.maxHp, this.hp + delta);
+    } else if (delta < 0) {
+      this.maxHp = Math.max(1, this.maxHp + delta);
+      if (this.hp > this.maxHp) this.hp = this.maxHp;
+    }
+    this.speed = UpgradeEffects.playerSpeed() * this.speedMult;
+    this.orbitalShieldEnabled = mods.orbitalShieldEnabled;
+    this.orbitalShieldRegenSec = mods.orbitalShieldRegenSec;
+    if (mods.orbitalShieldEnabled && this.shieldCharges < 1) {
+      // Grant one immediately on pick so the player sees the bubble appear.
+      this.shieldCharges += 1;
+      this.refreshShieldAura();
+      this.orbitalShieldTimer = 0;
+    }
+    this.phoenixCharges = mods.phoenixCharges;
+  }
+
+  // Restores up to maxHp. Used by Heal-on-Pickup and Vampiric.
+  heal(amount: number): number {
+    if (amount <= 0 || this.hp <= 0) return 0;
+    const before = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + amount);
+    return this.hp - before;
   }
 
   // FTUE safety net: clamp the minimum HP. Tutorial sets 1 so the death path
@@ -183,8 +246,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     sfxPlayerHurt();
     bus.emit(Events.PLAYER_DAMAGED, applied, this.hp);
     if (this.hp <= 0) {
-      sfxPlayerDeath();
-      bus.emit(Events.PLAYER_DIED);
+      // Phoenix: spend a charge, revive at 50% max HP, brief invuln. Per spec
+      // "max 1 stack" so charges stays at most 1.
+      if (this.phoenixCharges > 0) {
+        this.phoenixCharges -= 1;
+        this.hp = Math.max(1, Math.round(this.maxHp * 0.5));
+        this.hitInvulnTimer = Math.max(this.hitInvulnTimer, 1.5);
+        this.flashShieldBreak();
+        bus.emit(Events.PLAYER_DAMAGED, 0, this.hp);
+      } else {
+        sfxPlayerDeath();
+        bus.emit(Events.PLAYER_DIED);
+      }
     }
     return applied;
   }

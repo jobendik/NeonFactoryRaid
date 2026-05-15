@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { Economy } from '../systems/EconomySystem';
+import { InfestationSystem } from '../systems/InfestationSystem';
 import { MuteButton } from '../ui/MuteButton';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { AudioBus } from '../audio/AudioBus';
@@ -70,6 +71,8 @@ export class HUDScene extends Phaser.Scene {
   private waypoint!: Phaser.GameObjects.Graphics;
   private spmText!: Phaser.GameObjects.Text;
   private deployText!: Phaser.GameObjects.Text;
+  // M17 cleanse counter, top-right beneath the loot.
+  private cleanseText!: Phaser.GameObjects.Text;
   private lastFpsUpdate = 0;
   // Reusable pip slots (allocated once, shown/hidden per frame).
   private powerupPips: PowerupPip[] = [];
@@ -219,6 +222,19 @@ export class HUDScene extends Phaser.Scene {
         strokeThickness: 3,
       })
       .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+
+    this.cleanseText = this.add
+      .text(rightX, 64, '', {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#ff416b',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(2000)
       .setVisible(false);
@@ -387,6 +403,18 @@ export class HUDScene extends Phaser.Scene {
     }
 
     this.renderPowerupStrip(raid);
+
+    // M17 cleanse counter — visible whenever the player has any infested
+    // machines OR has cleanse progress this raid. Pluralizes the machine
+    // count so "1 machine" reads correctly.
+    const cleanse = raid.getCleanseInfo();
+    if (cleanse.active) {
+      const noun = cleanse.infestedRemaining === 1 ? 'machine' : 'machines';
+      const txt = `${Strings.infestationCleansingPrefix}${cleanse.progressInWindow}${Strings.infestationCleansingMid}${cleanse.perMachine} — ${cleanse.infestedRemaining} ${noun}`;
+      this.cleanseText.setText(txt).setVisible(true);
+    } else {
+      this.cleanseText.setVisible(false);
+    }
   }
 
   private renderPowerupStrip(raid: RaidScene): void {
@@ -451,6 +479,8 @@ export class HUDScene extends Phaser.Scene {
     this.hpText.setVisible(false);
     this.waypoint.setVisible(false);
     this.hideAllPips();
+    if (this.cleanseText) this.cleanseText.setVisible(false);
+    void InfestationSystem; // imported for future "infested HP bar" hook
 
     const wallet = Economy.getWallet();
     this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
@@ -484,6 +514,7 @@ export class HUDScene extends Phaser.Scene {
     this.waypoint.setVisible(false);
     if (this.spmText) this.spmText.setVisible(false);
     if (this.deployText) this.deployText.setVisible(false);
+    if (this.cleanseText) this.cleanseText.setVisible(false);
     if (this.shieldPip) this.hideAllPips();
   }
 

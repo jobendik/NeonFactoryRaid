@@ -14,11 +14,23 @@ export interface RaidEndPayload {
   penaltyApplied: boolean;
   // True when this was the FTUE tutorial raid (drives summary copy + downstream filters).
   tutorial: boolean;
+  // M17 — number of factory machines newly infested by this raid's outcome
+  // (always 0 for tutorial / extracted / grace-period failures). Surfaced
+  // on the SummaryScene as a prominent line so the player understands.
+  newlyInfested?: number;
+  // M17 — number of machines restored from cleanse this raid. Surfaced as
+  // a smaller line beneath the loot card.
+  machinesRestored?: number;
 }
+
+export type RaidMode = 'tutorial' | 'normal' | 'dailySeed';
 
 export interface RaidInitData {
   // Set by BootScene when !save.tutorialDone, by FactoryScene's deploy pad it's false.
   tutorial?: boolean;
+  // M19 — explicit raid mode. When omitted, falls back to: tutorial→'tutorial',
+  // else 'normal'. Daily-seed mode is set by FactoryScene's daily-seed deploy.
+  mode?: RaidMode;
 }
 
 export interface UpgradeLevels {

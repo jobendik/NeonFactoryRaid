@@ -6,7 +6,7 @@ import { SDKBridge } from './SDKBridge';
 import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 6;
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -18,10 +18,17 @@ export interface SaveStats {
 }
 
 export interface SaveDaily {
+  // YYYY-MM-DD UTC. New quest at midnight UTC; lastClaim tracks the date
+  // the player most recently claimed a daily quest.
   lastClaim: string;
-  streak: number;
+  // Current quest id (empty string when no active quest).
   questId: string;
   questProgress: number;
+  questCompleted: boolean;
+  // Streak: advances by 1 on quest claim. Forgives 1 missed day (skip-day
+  // rule). lastStreakDate tracks the YYYY-MM-DD the streak last advanced.
+  streakDay: number;
+  lastStreakDate: string;
 }
 
 export interface SaveSeason {
@@ -42,15 +49,32 @@ export interface SaveData {
   tokens: number;
   upgrades: UpgradeLevels;
   refinery: RefineryLevels;
-  operator: string;
+  // M16 — selectedOperator replaces v2's `operator`. The currently equipped
+  // operator id; defaults to 'pulse'.
+  selectedOperator: string;
   unlockedOperators: string[];
   achievements: string[];
   prestige: { count: number; cyberCores: number };
   daily: SaveDaily;
   seasonPass: SaveSeason;
   cosmetics: SaveCosmetics;
-  infestation: { machineIds: number[] };
+  // M17 — infested machine indices into the active generator slot list.
+  // failsBeforeFirst counts down from 3 (per §4.4); the first 3 failed raids
+  // ignore infestation entirely.
+  infestation: { machineIds: number[]; failsBeforeFirst: number };
+  // M17 — flips true after the first-time infestation modal is dismissed
+  // (per Run C clarification #3). Only mid-game text modal in the build.
+  infestationTutorialSeen: boolean;
   stats: SaveStats;
+  // M18 — cosmetic shards earned from daily quest claims. The actual
+  // cosmetic system lands post-launch; this is just a counter for now.
+  cosmeticShards: number;
+  // M19 — daily-seed leaderboard state. dailySeedAttempted is the YYYY-MM-DD
+  // of the last day the player ran the daily-seed raid (one attempt per day);
+  // dailySeedHistory stores the most recent 30 entries so the local
+  // leaderboard panel can render top scores.
+  dailySeedAttempted: string;
+  dailySeedHistory: { date: string; score: number }[];
   tutorialDone: boolean;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
   // tutorial); successfulExtracts only on extract. ftueUnlocks is the
@@ -82,15 +106,26 @@ export function createDefaultSave(): SaveData {
     tokens: 0,
     upgrades: { gen: 1, drone: 0, speed: 0, magnet: 0, damage: 0, luck: 0 },
     refinery: {},
-    operator: 'pulse',
+    selectedOperator: 'pulse',
     unlockedOperators: ['pulse'],
     achievements: [],
     prestige: { count: 0, cyberCores: 0 },
-    daily: { lastClaim: '', streak: 0, questId: '', questProgress: 0 },
+    daily: {
+      lastClaim: '',
+      questId: '',
+      questProgress: 0,
+      questCompleted: false,
+      streakDay: 0,
+      lastStreakDate: '',
+    },
     seasonPass: { tier: 0, xp: 0, premium: false },
     cosmetics: { equipped: { trail: '', skin: '', theme: '' }, owned: [] },
-    infestation: { machineIds: [] },
+    infestation: { machineIds: [], failsBeforeFirst: Balance.infestation.failsBeforeInfestation },
+    infestationTutorialSeen: false,
     stats: { runs: 0, extracts: 0, totalScrap: 0, bestRaid: 0, killCount: 0 },
+    cosmeticShards: 0,
+    dailySeedAttempted: '',
+    dailySeedHistory: [],
     tutorialDone: false,
     raidsCompleted: 0,
     successfulExtracts: 0,
@@ -100,12 +135,16 @@ export function createDefaultSave(): SaveData {
   };
 }
 
+// Loose intermediate shape used during migration. Migrations operate on this
+// object then we cast to SaveData once the chain is done.
+type MigratingSave = Record<string, unknown> & { version?: number };
+
 // v1 → v2: M11 adds raidsCompleted / successfulExtracts / firstCoreCollected /
 // ftueUnlocks. Carry over everything else, fill new fields with safe defaults.
 // Heuristic: a v1 save that already passed the tutorial (tutorialDone === true)
 // is most likely past the FTUE gates too, so we unlock the full panel for them
 // rather than re-hiding rows behind the new flags.
-function migrateV1toV2(v1: SaveData): SaveData {
+function migrateV1toV2(v1: MigratingSave): MigratingSave {
   const alreadyPlayed = v1.tutorialDone === true;
   const ftueUnlocks: FtueUnlocks = alreadyPlayed
     ? {
@@ -118,13 +157,90 @@ function migrateV1toV2(v1: SaveData): SaveData {
         missionBoard: false,
       }
     : defaultFtueUnlocks();
+  const stats = (v1.stats ?? {}) as { runs?: number; extracts?: number };
   return {
     ...v1,
     version: 2,
-    raidsCompleted: v1.stats?.runs ?? 0,
-    successfulExtracts: v1.stats?.extracts ?? 0,
-    firstCoreCollected: (v1.cores ?? 0) > 0,
+    raidsCompleted: stats.runs ?? 0,
+    successfulExtracts: stats.extracts ?? 0,
+    firstCoreCollected: ((v1.cores as number) ?? 0) > 0,
     ftueUnlocks,
+  };
+}
+
+// v2 → v3: M16 renames `operator` → `selectedOperator`. Carry over
+// unlockedOperators (already present on v2) and default selectedOperator
+// to the old `operator` value if any, falling back to 'pulse'.
+function migrateV2toV3(v2: MigratingSave): MigratingSave {
+  const selected = (typeof v2.operator === 'string' && v2.operator.length > 0
+    ? v2.operator
+    : 'pulse');
+  const unlocked = Array.isArray(v2.unlockedOperators) && (v2.unlockedOperators as unknown[]).length > 0
+    ? (v2.unlockedOperators as string[])
+    : ['pulse'];
+  const { operator: _unused, ...rest } = v2 as MigratingSave & { operator?: string };
+  void _unused;
+  return {
+    ...rest,
+    version: 3,
+    selectedOperator: selected,
+    unlockedOperators: unlocked,
+  };
+}
+
+// v3 → v4: M17 extends infestation with failsBeforeFirst (3-raid grace) and
+// adds infestationTutorialSeen (one-time mechanic explainer modal). Carry
+// existing machineIds; never start an existing player mid-grace if they
+// already failed raids in v3 (we have no way to know, so reset grace fresh).
+function migrateV3toV4(v3: MigratingSave): MigratingSave {
+  const oldInfest = (v3.infestation ?? {}) as { machineIds?: number[]; failsBeforeFirst?: number };
+  return {
+    ...v3,
+    version: 4,
+    infestation: {
+      machineIds: Array.isArray(oldInfest.machineIds) ? oldInfest.machineIds : [],
+      failsBeforeFirst:
+        typeof oldInfest.failsBeforeFirst === 'number'
+          ? oldInfest.failsBeforeFirst
+          : Balance.infestation.failsBeforeInfestation,
+    },
+    infestationTutorialSeen: false,
+  };
+}
+
+// v4 → v5: M18 reshapes daily (drop `streak`, add questCompleted +
+// streakDay + lastStreakDate). Adds cosmeticShards counter. Carry the
+// old streak number into streakDay if present.
+function migrateV4toV5(v4: MigratingSave): MigratingSave {
+  const oldDaily = (v4.daily ?? {}) as {
+    lastClaim?: string;
+    streak?: number;
+    questId?: string;
+    questProgress?: number;
+  };
+  const carriedStreak = typeof oldDaily.streak === 'number' ? oldDaily.streak : 0;
+  return {
+    ...v4,
+    version: 5,
+    daily: {
+      lastClaim: typeof oldDaily.lastClaim === 'string' ? oldDaily.lastClaim : '',
+      questId: typeof oldDaily.questId === 'string' ? oldDaily.questId : '',
+      questProgress: typeof oldDaily.questProgress === 'number' ? oldDaily.questProgress : 0,
+      questCompleted: false,
+      streakDay: carriedStreak,
+      lastStreakDate: '',
+    },
+    cosmeticShards: typeof v4.cosmeticShards === 'number' ? (v4.cosmeticShards as number) : 0,
+  };
+}
+
+// v5 → v6: M19 adds dailySeedAttempted + dailySeedHistory.
+function migrateV5toV6(v5: MigratingSave): MigratingSave {
+  return {
+    ...v5,
+    version: 6,
+    dailySeedAttempted: typeof v5.dailySeedAttempted === 'string' ? v5.dailySeedAttempted : '',
+    dailySeedHistory: Array.isArray(v5.dailySeedHistory) ? v5.dailySeedHistory : [],
   };
 }
 
@@ -134,23 +250,25 @@ function migrateV1toV2(v1: SaveData): SaveData {
 // arbitrary partial shapes from a pre-history era.
 function migrate(raw: unknown): SaveData {
   if (!raw || typeof raw !== 'object') return createDefaultSave();
-  let save = raw as Partial<SaveData> & { version?: number };
+  let save = raw as MigratingSave;
 
   if (!save.version) {
     // v0 (pre-versioning) → discard, start fresh.
     return createDefaultSave();
   }
 
-  if (save.version === 1) {
-    save = migrateV1toV2(save as SaveData);
-  }
+  if (save.version === 1) save = migrateV1toV2(save);
+  if (save.version === 2) save = migrateV2toV3(save);
+  if (save.version === 3) save = migrateV3toV4(save);
+  if (save.version === 4) save = migrateV4toV5(save);
+  if (save.version === 5) save = migrateV5toV6(save);
 
   if (save.version === SAVE_VERSION) {
-    return save as SaveData;
+    return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 2) save = migrateV2toV3(save as SaveData);
+  //   if (save.version === 6) save = migrateV6toV7(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

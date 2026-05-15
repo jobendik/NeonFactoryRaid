@@ -7,7 +7,7 @@
 
 import { Balance } from './Balance';
 
-export type EnemyKind = 'grunt' | 'swarmer' | 'tank' | 'shooter' | 'elite';
+export type EnemyKind = 'grunt' | 'swarmer' | 'tank' | 'shooter' | 'elite' | 'infested';
 
 export type EnemyBehavior = 'chaser' | 'shooter';
 
@@ -87,6 +87,22 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     scrapDrop: 24,
     coreChance: 0.55,
     contactDamage: 28,
+  },
+  // §4 infestation wave - red-tinted swarmer variant. Spawns only when the
+  // player has any infested machines, in addition to the normal wave roll.
+  // Each kill registers cleanse progress against
+  // Balance.infestation.killsToRestoreMachine.
+  infested: {
+    hp: 18,
+    speed: 130,
+    size: 24,
+    color: 0xff1644,
+    textureKey: 'enemy-infested',
+    shape: 'triangle',
+    behavior: 'chaser',
+    scrapDrop: 2,
+    coreChance: 0,
+    contactDamage: 6,
   },
 };
 

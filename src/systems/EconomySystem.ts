@@ -1,5 +1,6 @@
 import { Balance } from '../config/Balance';
 import { saveSystem } from '../platform/SaveSystem';
+import { InfestationSystem } from './InfestationSystem';
 
 // EconomySystem centralizes the few rules that touch the player wallet:
 //   - SPM formula per blueprint §8.7
@@ -18,12 +19,15 @@ function clampInfestation(ratio: number): number {
 
 export const Economy = {
   // SPM = 14 × gen_level × (1 + drone_level × 0.22) × boostMult × (1 - infestation_ratio)
+  // Per blueprint §8.7. Infestation ratio defaults to the live save state so
+  // every caller (FactoryScene SPM display, generator drop cadence, offline
+  // production) automatically zeroes-out infested machine contribution.
   computeSpm(opts?: { boostActive?: boolean; infestationRatio?: number }): number {
     const save = saveSystem.get();
     const genLevel = Math.max(1, save.upgrades.gen);
     const droneLevel = Math.max(0, save.upgrades.drone);
     const boost = opts?.boostActive ? Balance.economy.factoryBoostMult : 1;
-    const infest = clampInfestation(opts?.infestationRatio ?? 0);
+    const infest = clampInfestation(opts?.infestationRatio ?? InfestationSystem.getInfestationRatio());
     return Balance.economy.spm.base * genLevel * (1 + droneLevel * Balance.economy.spm.drone) * boost * (1 - infest);
   },
 
@@ -45,6 +49,14 @@ export const Economy = {
     const save = saveSystem.get();
     if (save.scrap < amount) return false;
     save.scrap -= amount;
+    return true;
+  },
+
+  // Returns true if the spend succeeded. Operator unlocks consume Cores.
+  spendCores(amount: number): boolean {
+    const save = saveSystem.get();
+    if (save.cores < amount) return false;
+    save.cores -= amount;
     return true;
   },
 

@@ -30,6 +30,8 @@ export class SummaryScene extends Phaser.Scene {
   private greedMult = 1.0;
   private penaltyApplied = false;
   private tutorial = false;
+  private newlyInfested = 0;
+  private machinesRestored = 0;
 
   constructor() {
     super({ key: 'SummaryScene' });
@@ -42,6 +44,8 @@ export class SummaryScene extends Phaser.Scene {
       this.greedMult = data.greedMult ?? 1.0;
       this.penaltyApplied = !!data.penaltyApplied;
       this.tutorial = !!data.tutorial;
+      this.newlyInfested = data.newlyInfested ?? 0;
+      this.machinesRestored = data.machinesRestored ?? 0;
     }
   }
 
@@ -88,6 +92,23 @@ export class SummaryScene extends Phaser.Scene {
         .setOrigin(0.5);
     }
 
+    // M17 — prominent infestation line on a fail with new infestation. Sits
+    // above the loot card so the player can't miss it.
+    if (this.newlyInfested > 0) {
+      const text = `${Strings.infestationSummaryPrefix}${this.newlyInfested}${Strings.infestationSummarySuffix}`;
+      this.add
+        .text(w / 2, h * 0.355, text, {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+          color: '#ff416b',
+          stroke: '#000000',
+          strokeThickness: 3,
+          align: 'center',
+          wordWrap: { width: w * 0.7 },
+        })
+        .setOrigin(0.5);
+    }
+
     // Loot card
     const cardY = h * 0.40;
     const cardW = 360;
@@ -126,6 +147,19 @@ export class SummaryScene extends Phaser.Scene {
         color: '#ffffff',
       })
       .setOrigin(1, 0.5);
+
+    // M17 — small "restored" line on extract or fail that cleansed machines.
+    if (this.machinesRestored > 0) {
+      this.add
+        .text(w / 2, cardY + cardH / 2 + 14, `+${this.machinesRestored} machine${this.machinesRestored === 1 ? '' : 's'} cleansed`, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#72ff9f',
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0.5, 0);
+    }
 
     // Buttons row. The FTUE tutorial summary collapses to the single "UPGRADE"
     // button per §5.2: the player goes straight back to the factory, no

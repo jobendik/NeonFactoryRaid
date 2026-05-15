@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { EnemyDefs, ENEMY_TEXTURE_DIM, type EnemyKind, type EnemyDef } from '../config/EnemyDefs';
+import type { Rng } from '../core/Rng';
 
 // Texture dim per-spec: base 44px is enough for grunt/swarmer/tank/shooter,
 // but the M14 elite (size 56) needs a larger canvas with padding so it doesn't
@@ -38,6 +39,12 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
   // Knockback (M14). While > 0, the chaser tick is suppressed and the physics
   // body holds the externally-set velocity from applyKnockback().
   private knockbackTimer = 0;
+  // M17 glitch jitter (infested-only). Drives a sub-degree rotation wobble
+  // so the sprite reads as "corrupted" without affecting the body.
+  private glitchPhase = 0;
+  // M19 — per-raid Rng reference; supplied at spawn time. Drives the
+  // shooter fire-cooldown rolls so daily-seed raids are reproducible.
+  private rng: Rng | null = null;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Enemy.ensureTextures(scene);
@@ -49,8 +56,9 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.body_.enable = false;
   }
 
-  spawn(x: number, y: number, kind: EnemyKind, hpMult: number = 1): void {
+  spawn(x: number, y: number, kind: EnemyKind, hpMult: number = 1, rng: Rng | null = null): void {
     this.kind = kind;
+    this.rng = rng;
     const spec = EnemyDefs[kind];
     const hp = Math.max(1, Math.round(spec.hp * hpMult));
     this.hp = hp;
@@ -67,10 +75,9 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setAlpha(1);
     this.setRotation(0);
 
-    this.fireCooldown = Phaser.Math.FloatBetween(
-      Balance.shooter.fireIntervalMinSec * 0.5,
-      Balance.shooter.fireIntervalMaxSec,
-    );
+    const min = Balance.shooter.fireIntervalMinSec * 0.5;
+    const max = Balance.shooter.fireIntervalMaxSec;
+    this.fireCooldown = rng ? rng.range(min, max) : Phaser.Math.FloatBetween(min, max);
     this.telegraphLeft = 0;
     this.knockbackTimer = 0;
     if (this.telegraphGfx) this.telegraphGfx.clear();
@@ -112,6 +119,11 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       return this.tickShooter(dt, playerX, playerY);
     }
     this.tickChaser(playerX, playerY);
+    if (this.kind === 'infested') {
+      this.glitchPhase += dt * Balance.infestation.glitchHz;
+      const jitter = Math.sin(this.glitchPhase) * Balance.infestation.glitchAmplitudeRad;
+      this.setRotation(this.rotation + jitter);
+    }
     return { fired: null };
   }
 
@@ -170,10 +182,9 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
         const tdx = this.telegraphTargetX - this.x;
         const tdy = this.telegraphTargetY - this.y;
         const tdist = Math.hypot(tdx, tdy) || 1;
-        this.fireCooldown = Phaser.Math.FloatBetween(
-          Balance.shooter.fireIntervalMinSec,
-          Balance.shooter.fireIntervalMaxSec,
-        );
+        const min = Balance.shooter.fireIntervalMinSec;
+        const max = Balance.shooter.fireIntervalMaxSec;
+        this.fireCooldown = this.rng ? this.rng.range(min, max) : Phaser.Math.FloatBetween(min, max);
         return {
           fired: {
             fromX: this.x,

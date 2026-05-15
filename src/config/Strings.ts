@@ -34,6 +34,126 @@ export const Strings = {
   ftueDeployPrompt: 'DEPLOY',
   // Tutorial summary single-button label per §5.2 ("Single button: UPGRADE").
   summaryUpgrade: 'UPGRADE',
+
+  // M15 — in-run drafting modal.
+  draftTitle: 'CHOOSE SIGNAL MOD',
+  draftRarityCommon: 'COMMON',
+  draftRarityRare: 'RARE',
+  draftRarityEpic: 'EPIC',
+
+  // M15 — card names + one-line effects per §12.2.
+  // Implemented:
+  cardSharperShotsName: 'Sharper Shots',
+  cardSharperShotsEffect: '+15% damage',
+  cardQuickFeetName: 'Quick Feet',
+  cardQuickFeetEffect: '+10% movement speed',
+  cardWideMagnetName: 'Wide Magnet',
+  cardWideMagnetEffect: '+20% pickup range',
+  cardHardyName: 'Hardy',
+  cardHardyEffect: '+20 max HP',
+  cardBurstFireName: 'Burst Fire',
+  cardBurstFireEffect: '+10% fire rate',
+  cardLuckyName: 'Lucky',
+  cardLuckyEffect: '+5% core drop chance',
+  cardPierceName: 'Pierce',
+  cardPierceEffect: 'Shots pierce 1 enemy',
+  cardChainLightningName: 'Chain Lightning',
+  cardChainLightningEffect: 'Shots chain to nearest enemy',
+  cardMagnetStormName: 'Magnet Storm',
+  cardMagnetStormEffect: 'Pickups rush to you for 8s',
+  cardDashMasterName: 'Dash Master',
+  cardDashMasterEffect: '-30% dash cooldown',
+  cardHealOnPickupName: 'Heal on Pickup',
+  cardHealOnPickupEffect: 'Scrap restores 1 HP',
+  cardCritShotName: 'Crit Shot',
+  cardCritShotEffect: '15% chance for 3x damage',
+  cardOrbitalShieldName: 'Orbital Shield',
+  cardOrbitalShieldEffect: 'Shield bubble, regens every 12s',
+  cardSplitShotName: 'Split Shot',
+  cardSplitShotEffect: 'Shots fork into 2',
+  cardDroneMultiplierName: 'Drone Multiplier',
+  cardDroneMultiplierEffect: 'Drone count doubled',
+  cardVampiricName: 'Vampiric',
+  cardVampiricEffect: '10% kills heal 5 HP',
+  cardGreedSurgeName: 'Greed Surge',
+  cardGreedSurgeEffect: '+50% loot multiplier',
+  cardPhoenixName: 'Phoenix',
+  cardPhoenixEffect: 'Revive once at 50% HP',
+
+  // M15 — deferred cards (still listed so the pool count is honest, but
+  // filtered out at draw time). See CardDefs.ts.
+  cardRicochetName: 'Ricochet',
+  cardRicochetEffect: 'Shots bounce off walls',
+  cardSlowFieldName: 'Slow Field',
+  cardSlowFieldEffect: 'Enemies near you slow 30%',
+  cardFrenzyModeName: 'Frenzy Mode',
+  cardFrenzyModeEffect: '-50% fire rate at low HP',
+  cardNovaDashName: 'Nova Dash',
+  cardNovaDashEffect: 'Dash creates damaging ring',
+  cardTimeDilationName: 'Time Dilation',
+  cardTimeDilationEffect: 'Enemies move 15% slower',
+  cardPyrokineticName: 'Pyrokinetic',
+  cardPyrokineticEffect: 'Death blasts harm nearby',
+
+  draftAutoPick: 'Auto-pick in',
+  draftPicked: 'PICKED',
+
+  // M16 — operator metadata + picker UI.
+  operatorPanelTitle: 'OPERATORS',
+  operatorPulseName: 'PULSE',
+  operatorPulseDesc: 'Balanced kit',
+  operatorVantaName: 'VANTA',
+  operatorVantaDesc: '+2 drones, -10% damage',
+  operatorSurgeName: 'SURGE',
+  operatorSurgeDesc: '+50% damage, -25% HP',
+  operatorLodestoneName: 'LODESTONE',
+  operatorLodestoneDesc: '+100% magnet, slow',
+  operatorLocked: 'LOCKED',
+  operatorComingSoon: 'COMING SOON',
+  operatorCostPrefix: 'Costs ',
+  operatorCostSuffix: ' Cores',
+  operatorSelected: 'SELECTED',
+  operatorUnlock: 'UNLOCK',
+
+  // M17 — infestation system. Per Run C clarification #3, the first-time
+  // mechanic modal copy is short (3 sentences max).
+  infestationSummaryPrefix: 'FACTORY INFESTED — ',
+  infestationSummarySuffix: ' machines disabled. Clear them in your next raid.',
+  infestationToast: 'Your factory is infested. Deploy to cleanse.',
+  infestationModalTitle: 'FACTORY INFESTED',
+  infestationModalBody:
+    'When you fail to extract, enemies infest your machines and stop their production. ' +
+    'Killing red infestation enemies on your next raid restores them. ' +
+    'Push to extract — your factory is at stake.',
+  infestationModalDismiss: 'GOT IT',
+  infestationCleansingPrefix: 'Cleansing: ',
+  infestationCleansingMid: ' / ',
+  infestationCleansingSuffix: ' machines',
+  infestationClearAd: 'CLEAR INFESTATION  [M20]',
+
+  // M18 — daily quest + streak.
+  questPanelTitle: 'DAILY QUEST',
+  questClaimReady: 'CLAIM',
+  questClaimed: 'CLAIMED',
+  questProgressMid: ' / ',
+  questExtractsText: 'Extract 2 times today',
+  questCoresText: 'Collect 3 Neon Cores',
+  questKillsText: 'Kill 50 enemies in raids',
+  questPowerupsText: 'Use 3 power-ups in one raid',
+  questGreedX2Text: 'Reach Greed x2',
+  questDamagelessText: 'Survive 60s without damage',
+  streakLabel: 'Streak: Day ',
+  questRewardToast: 'Quest reward: +100 Scrap, +1 Core, +1 Shard',
+
+  // M19 — daily seed leaderboard.
+  factoryDailySeed: 'DAILY SEED',
+  factoryDailySeedAttempted: 'DAILY DONE',
+  leaderboardButton: "TODAY'S BOARD",
+  leaderboardTitle: "TODAY'S TOP SCORES",
+  leaderboardEmpty: 'No daily attempts yet. Try one!',
+  leaderboardYou: 'YOU',
+  leaderboardClose: 'CLOSE',
+  factoryDailySeedHint: 'Same seed, all players',
 } as const;
 
 export type StringKey = keyof typeof Strings;
