@@ -172,7 +172,9 @@ export const CardDefs: Record<string, CardDef> = {
     name: Strings.cardDroneMultiplierName,
     effect: Strings.cardDroneMultiplierEffect,
     tier: 'epic',
-    apply: m => { m.droneMultiplier *= 2; },
+    // Per spec: "doubles existing drone count - even if 0, becomes 0".
+    // bonusWeaponTargets is seeded by the active operator at raid start.
+    apply: m => { m.bonusWeaponTargets *= 2; },
   },
   vampiric: {
     id: 'vampiric',

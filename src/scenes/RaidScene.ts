@@ -22,6 +22,7 @@ import { saveSystem } from '../platform/SaveSystem';
 import { MusicEngine } from '../audio/music';
 import { DraftSystem } from '../systems/DraftSystem';
 import { createDefaultRunMods, type RunMods } from '../systems/RunMods';
+import { OperatorSystem } from '../systems/OperatorSystem';
 import type { CardDef } from '../config/CardDefs';
 import type { DraftSceneInit } from './DraftScene';
 import { Rng } from '../core/Rng';
@@ -117,6 +118,11 @@ export class RaidScene extends Phaser.Scene {
   // Per-raid Rng. M19 will switch tutorial/normal/daily-seed seeding modes;
   // for M15 it's just `Date.now()` so DraftSystem has a non-Math.random source.
   private rng!: Rng;
+  // Orbiting drone visuals (cosmetic - the actual gameplay effect is the
+  // bonusWeaponTargets count read by WeaponSystem). Refreshed on raid start
+  // and after a Drone Multiplier card pick.
+  private operatorOrbs: Phaser.GameObjects.Graphics[] = [];
+  private orbAngle = 0;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => {
@@ -247,16 +253,19 @@ export class RaidScene extends Phaser.Scene {
     this.nearMissAwarded.clear();
     this.buildGreedOverlays();
 
-    // RunMods + drafting. Reset to defaults; the player has no operator
-    // passive seeded yet (M16 hooks here). Then push current mods into
-    // Player + WeaponSystem so the very first frame reads consistent state.
+    // RunMods + drafting + operator. Reset to defaults, seed operator passive,
+    // then push current mods into Player + WeaponSystem so the very first
+    // frame reads consistent state. Order matters: operator before draft so
+    // card picks layer cleanly on top of operator base values.
     this.runMods = createDefaultRunMods();
+    OperatorSystem.applyOperatorMods(this.runMods);
     this.magnetStormRemaining = 0;
     this.rng = new Rng(Date.now());
     this.draftSystem = new DraftSystem(this.rng);
     this.player.applyRunMods(this.runMods);
     this.weapons.applyRunMods(this.runMods);
     this.draftActive = false;
+    this.refreshOperatorOrbs();
 
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
@@ -283,8 +292,40 @@ export class RaidScene extends Phaser.Scene {
       // could grant magnet storm later).
       this.runMods.magnetStormDurAdd -= Balance.cards.magnetStormDurSec;
     }
+    this.refreshOperatorOrbs();
     this.draftActive = false;
   };
+
+  // Spawns one tiny orbit dot per bonusWeaponTargets so the player visually
+  // sees their drone count. Called on raid start and after card picks (Drone
+  // Multiplier). The orbs are graphics-only — they don't fire themselves;
+  // bonusWeaponTargets is what actually feeds WeaponSystem.
+  private refreshOperatorOrbs(): void {
+    for (const o of this.operatorOrbs) o.destroy();
+    this.operatorOrbs = [];
+    const count = Math.max(0, Math.floor(this.runMods.bonusWeaponTargets));
+    if (count <= 0) return;
+    for (let i = 0; i < count; i++) {
+      const g = this.add.graphics().setDepth(this.player.depth + 1);
+      g.fillStyle(0xa76cff, 0.9);
+      g.lineStyle(1.5, 0xffffff, 0.95);
+      g.fillCircle(0, 0, 5);
+      g.strokeCircle(0, 0, 5);
+      this.operatorOrbs.push(g);
+    }
+  }
+
+  private tickOperatorOrbs(dt: number): void {
+    if (this.operatorOrbs.length === 0) return;
+    this.orbAngle += dt * 2.0;
+    const r = 36;
+    for (let i = 0; i < this.operatorOrbs.length; i++) {
+      const angle = this.orbAngle + (i / this.operatorOrbs.length) * Math.PI * 2;
+      const x = this.player.x + Math.cos(angle) * r;
+      const y = this.player.y + Math.sin(angle) * r;
+      this.operatorOrbs[i].setPosition(x, y);
+    }
+  }
 
   // Pauses the raid and launches DraftScene with three rng-drawn cards.
   // Resume happens in onDraftPicked (or in DraftScene's auto-pick path,
@@ -398,6 +439,7 @@ export class RaidScene extends Phaser.Scene {
     this.tickExtractionSfx(dt);
     this.tickAdaptiveMusic();
     this.tickNearMiss();
+    this.tickOperatorOrbs(dt);
 
     if (this.timeRemaining <= 0) {
       this.requestEnd('collapsed');
@@ -544,6 +586,8 @@ export class RaidScene extends Phaser.Scene {
     this.deepEndTint?.destroy();
     this.deepEndTint = null;
     this.nearMissAwarded.clear();
+    for (const o of this.operatorOrbs) o.destroy();
+    this.operatorOrbs = [];
     bus.emit(Events.RAID_ENDED);
   }
 

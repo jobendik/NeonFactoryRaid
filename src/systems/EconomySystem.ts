@@ -48,6 +48,14 @@ export const Economy = {
     return true;
   },
 
+  // Returns true if the spend succeeded. Operator unlocks consume Cores.
+  spendCores(amount: number): boolean {
+    const save = saveSystem.get();
+    if (save.cores < amount) return false;
+    save.cores -= amount;
+    return true;
+  },
+
   getWallet(): { scrap: number; cores: number } {
     const save = saveSystem.get();
     return { scrap: save.scrap, cores: save.cores };

@@ -6,7 +6,7 @@ import { SDKBridge } from './SDKBridge';
 import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -42,7 +42,9 @@ export interface SaveData {
   tokens: number;
   upgrades: UpgradeLevels;
   refinery: RefineryLevels;
-  operator: string;
+  // M16 — selectedOperator replaces v2's `operator`. The currently equipped
+  // operator id; defaults to 'pulse'.
+  selectedOperator: string;
   unlockedOperators: string[];
   achievements: string[];
   prestige: { count: number; cyberCores: number };
@@ -82,7 +84,7 @@ export function createDefaultSave(): SaveData {
     tokens: 0,
     upgrades: { gen: 1, drone: 0, speed: 0, magnet: 0, damage: 0, luck: 0 },
     refinery: {},
-    operator: 'pulse',
+    selectedOperator: 'pulse',
     unlockedOperators: ['pulse'],
     achievements: [],
     prestige: { count: 0, cyberCores: 0 },
@@ -100,12 +102,16 @@ export function createDefaultSave(): SaveData {
   };
 }
 
+// Loose intermediate shape used during migration. Migrations operate on this
+// object then we cast to SaveData once the chain is done.
+type MigratingSave = Record<string, unknown> & { version?: number };
+
 // v1 → v2: M11 adds raidsCompleted / successfulExtracts / firstCoreCollected /
 // ftueUnlocks. Carry over everything else, fill new fields with safe defaults.
 // Heuristic: a v1 save that already passed the tutorial (tutorialDone === true)
 // is most likely past the FTUE gates too, so we unlock the full panel for them
 // rather than re-hiding rows behind the new flags.
-function migrateV1toV2(v1: SaveData): SaveData {
+function migrateV1toV2(v1: MigratingSave): MigratingSave {
   const alreadyPlayed = v1.tutorialDone === true;
   const ftueUnlocks: FtueUnlocks = alreadyPlayed
     ? {
@@ -118,13 +124,34 @@ function migrateV1toV2(v1: SaveData): SaveData {
         missionBoard: false,
       }
     : defaultFtueUnlocks();
+  const stats = (v1.stats ?? {}) as { runs?: number; extracts?: number };
   return {
     ...v1,
     version: 2,
-    raidsCompleted: v1.stats?.runs ?? 0,
-    successfulExtracts: v1.stats?.extracts ?? 0,
-    firstCoreCollected: (v1.cores ?? 0) > 0,
+    raidsCompleted: stats.runs ?? 0,
+    successfulExtracts: stats.extracts ?? 0,
+    firstCoreCollected: ((v1.cores as number) ?? 0) > 0,
     ftueUnlocks,
+  };
+}
+
+// v2 → v3: M16 renames `operator` → `selectedOperator`. Carry over
+// unlockedOperators (already present on v2) and default selectedOperator
+// to the old `operator` value if any, falling back to 'pulse'.
+function migrateV2toV3(v2: MigratingSave): MigratingSave {
+  const selected = (typeof v2.operator === 'string' && v2.operator.length > 0
+    ? v2.operator
+    : 'pulse');
+  const unlocked = Array.isArray(v2.unlockedOperators) && (v2.unlockedOperators as unknown[]).length > 0
+    ? (v2.unlockedOperators as string[])
+    : ['pulse'];
+  const { operator: _unused, ...rest } = v2 as MigratingSave & { operator?: string };
+  void _unused;
+  return {
+    ...rest,
+    version: 3,
+    selectedOperator: selected,
+    unlockedOperators: unlocked,
   };
 }
 
@@ -134,23 +161,22 @@ function migrateV1toV2(v1: SaveData): SaveData {
 // arbitrary partial shapes from a pre-history era.
 function migrate(raw: unknown): SaveData {
   if (!raw || typeof raw !== 'object') return createDefaultSave();
-  let save = raw as Partial<SaveData> & { version?: number };
+  let save = raw as MigratingSave;
 
   if (!save.version) {
     // v0 (pre-versioning) → discard, start fresh.
     return createDefaultSave();
   }
 
-  if (save.version === 1) {
-    save = migrateV1toV2(save as SaveData);
-  }
+  if (save.version === 1) save = migrateV1toV2(save);
+  if (save.version === 2) save = migrateV2toV3(save);
 
   if (save.version === SAVE_VERSION) {
-    return save as SaveData;
+    return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 2) save = migrateV2toV3(save as SaveData);
+  //   if (save.version === 3) save = migrateV3toV4(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

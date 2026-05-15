@@ -44,6 +44,7 @@ export class WeaponSystem {
   private modSplitShot = 0;
   private modCritChance = 0;
   private modCritMult = 3;
+  private modBonusTargets = 0;
 
   constructor(scene: Phaser.Scene, getPlayer: PlayerPositionProvider, getEnemies: EnemyListProvider) {
     this.scene = scene;
@@ -78,6 +79,7 @@ export class WeaponSystem {
     this.modSplitShot = mods.splitShot;
     this.modCritChance = mods.critChance;
     this.modCritMult = mods.critMult;
+    this.modBonusTargets = Math.max(0, Math.floor(mods.bonusWeaponTargets));
   }
 
   // Returns an array of hits (0 to effectiveTargets). Multi-target firing
@@ -88,12 +90,15 @@ export class WeaponSystem {
     this.fireTimer = Math.max(0, this.fireTimer - dt);
     if (this.fireTimer > 0) return [];
 
-    // Effective target count = base × (1 + splitShot) + pierce.
+    // Effective target count = base × (1 + splitShot) + pierce + bonusTargets.
     // Split Shot multiplies the fork count (so 1 shot becomes 2/3/...).
     // Pierce adds extra targets along the line; for hitscan we approximate
     // by hitting the next-nearest enemies (no actual line geometry yet).
+    // BonusTargets comes from operator-granted drones (Vanta: +2 on raid start)
+    // and is multiplied by Drone Multiplier card.
     const splitMult = 1 + this.modSplitShot;
-    const effectiveTargets = this.targetsPerShot * splitMult + this.modPierce;
+    const effectiveTargets =
+      this.targetsPerShot * splitMult + this.modPierce + this.modBonusTargets;
     const targets = this.findNearestInRange(effectiveTargets);
     if (targets.length === 0) return [];
 

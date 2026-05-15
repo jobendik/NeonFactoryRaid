@@ -97,6 +97,23 @@ export const Strings = {
 
   draftAutoPick: 'Auto-pick in',
   draftPicked: 'PICKED',
+
+  // M16 — operator metadata + picker UI.
+  operatorPanelTitle: 'OPERATORS',
+  operatorPulseName: 'PULSE',
+  operatorPulseDesc: 'Balanced kit',
+  operatorVantaName: 'VANTA',
+  operatorVantaDesc: '+2 drones, -10% damage',
+  operatorSurgeName: 'SURGE',
+  operatorSurgeDesc: '+50% damage, -25% HP',
+  operatorLodestoneName: 'LODESTONE',
+  operatorLodestoneDesc: '+100% magnet, slow',
+  operatorLocked: 'LOCKED',
+  operatorComingSoon: 'COMING SOON',
+  operatorCostPrefix: 'Costs ',
+  operatorCostSuffix: ' Cores',
+  operatorSelected: 'SELECTED',
+  operatorUnlock: 'UNLOCK',
 } as const;
 
 export type StringKey = keyof typeof Strings;

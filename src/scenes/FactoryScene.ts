@@ -14,6 +14,8 @@ import { UpgradeCard } from '../ui/UpgradeCard';
 import { UPGRADE_KEYS, type UpgradeKey } from '../config/UpgradeDefs';
 import { MusicEngine } from '../audio/music';
 import { sfxScrap, sfxCore, sfxUpgradePurchased, sfxGeneratorProduce } from '../audio/sfx';
+import { OperatorDefs, OPERATOR_ORDER, type OperatorId } from '../config/OperatorDefs';
+import { OperatorSystem } from '../systems/OperatorSystem';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -52,6 +54,9 @@ export class FactoryScene extends Phaser.Scene {
   // the pad or once raidsCompleted advances past 1.
   private deployPrompt: Phaser.GameObjects.Text | null = null;
   private deployPromptTween: Phaser.Tweens.Tween | null = null;
+  // M16 operator picker: rendered to the left of the deploy pad. Each entry
+  // owns its own Phaser game objects so we can refresh state on click.
+  private operatorPanelObjects: Phaser.GameObjects.GameObject[] = [];
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -90,6 +95,7 @@ export class FactoryScene extends Phaser.Scene {
     this.spawnMilestoneVisuals();
     this.spawnDrones();
     this.buildUpgradePanel();
+    this.buildOperatorPanel();
 
     this.deployState = 'idle';
     this.deployHold = 0;
@@ -206,6 +212,7 @@ export class FactoryScene extends Phaser.Scene {
     this.deployPromptTween = null;
     this.deployPrompt?.destroy();
     this.deployPrompt = null;
+    this.destroyOperatorPanel();
   }
 
   // ---- accessors used by HUDScene ----
@@ -520,5 +527,161 @@ export class FactoryScene extends Phaser.Scene {
     this.padFill.beginPath();
     this.padFill.arc(this.padX, this.padY, this.padRadius * 0.82, start, end, false);
     this.padFill.strokePath();
+  }
+
+  // §11 operator picker. Pinned to the viewport (scroll-factor 0) along the
+  // bottom-center of the screen so it's reachable regardless of the player's
+  // position in the factory. One tile per operator in OPERATOR_ORDER. Tap
+  // an unlocked operator to select; tap a locked one with sufficient Cores
+  // to unlock + select. Surge / Lodestone are flagged `locked: true` (no
+  // implementation) and show "COMING SOON".
+  private buildOperatorPanel(): void {
+    this.destroyOperatorPanel();
+
+    const tileW = 100;
+    const tileH = 110;
+    const gap = 14;
+    const totalW = OPERATOR_ORDER.length * tileW + (OPERATOR_ORDER.length - 1) * gap;
+    const startX = (this.scale.width - totalW) / 2;
+    const y = this.scale.height - tileH - 16;
+
+    const header = this.add
+      .text(this.scale.width / 2, y - 18, Strings.operatorPanelTitle, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#22f6ff',
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2050);
+    this.operatorPanelObjects.push(header);
+
+    for (let i = 0; i < OPERATOR_ORDER.length; i++) {
+      const id = OPERATOR_ORDER[i];
+      const x = startX + i * (tileW + gap);
+      this.buildOperatorTile(id, x, y, tileW, tileH);
+    }
+  }
+
+  private buildOperatorTile(id: OperatorId, x: number, y: number, w: number, h: number): void {
+    const def = OperatorDefs[id];
+    const isUnlocked = OperatorSystem.isUnlocked(id);
+    const isSelected = OperatorSystem.getSelected() === id;
+    const isLocked = def.locked;
+
+    // Background tile. Selected gets a brighter border.
+    const bg = this.add
+      .rectangle(x + w / 2, y + h / 2, w, h, 0x0a1014, 0.92)
+      .setStrokeStyle(isSelected ? 3 : 2, isSelected ? def.color : 0x4a5560, isSelected ? 1 : 0.7)
+      .setScrollFactor(0)
+      .setDepth(2050);
+    this.operatorPanelObjects.push(bg);
+
+    // Silhouette - dim when locked, full color when selectable.
+    const silhouette = this.add.graphics().setScrollFactor(0).setDepth(2051);
+    silhouette.setPosition(x + w / 2, y + 28);
+    silhouette.fillStyle(def.color, isLocked || !isUnlocked ? 0.25 : 0.85);
+    silhouette.lineStyle(2, def.color, isLocked || !isUnlocked ? 0.35 : 1);
+    // Triangle silhouette pointing right - mirrors the player ship.
+    silhouette.beginPath();
+    silhouette.moveTo(14, 0);
+    silhouette.lineTo(-12, -10);
+    silhouette.lineTo(-6, 0);
+    silhouette.lineTo(-12, 10);
+    silhouette.closePath();
+    silhouette.fillPath();
+    silhouette.strokePath();
+    this.operatorPanelObjects.push(silhouette);
+
+    // Name
+    const name = this.add
+      .text(x + w / 2, y + 52, def.name, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: isLocked ? '#666666' : '#ffffff',
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.operatorPanelObjects.push(name);
+
+    // Status line (state-dependent)
+    const statusText = isLocked
+      ? Strings.operatorComingSoon
+      : isSelected
+        ? Strings.operatorSelected
+        : isUnlocked
+          ? Strings.operatorUnlock
+          : `${Strings.operatorCostPrefix}${def.unlockCost}${Strings.operatorCostSuffix}`;
+    const statusColor = isLocked
+      ? '#666666'
+      : isSelected
+        ? '#72ff9f'
+        : isUnlocked
+          ? '#22f6ff'
+          : '#ffd75a';
+    const status = this.add
+      .text(x + w / 2, y + 70, statusText, {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: statusColor,
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.operatorPanelObjects.push(status);
+
+    // Description
+    const desc = this.add
+      .text(x + w / 2, y + h - 18, def.description, {
+        fontFamily: 'monospace',
+        fontSize: '8px',
+        color: isLocked ? '#444444' : '#88a0a8',
+        wordWrap: { width: w - 8 },
+        align: 'center',
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.operatorPanelObjects.push(desc);
+
+    if (isLocked) return; // No interactive zone for unimplemented operators.
+
+    const hit = this.add
+      .zone(x, y, w, h)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2052)
+      .setInteractive({ useHandCursor: true });
+    this.operatorPanelObjects.push(hit);
+    hit.on('pointerdown', () => this.handleOperatorTilePress(id));
+  }
+
+  private handleOperatorTilePress(id: OperatorId): void {
+    const def = OperatorDefs[id];
+    if (def.locked) return;
+    if (!OperatorSystem.isUnlocked(id)) {
+      // Tap to unlock if affordable.
+      const ok = OperatorSystem.unlock(id);
+      if (!ok) return; // not enough cores
+      sfxUpgradePurchased();
+      OperatorSystem.select(id);
+    } else {
+      const before = OperatorSystem.getSelected();
+      const ok = OperatorSystem.select(id);
+      if (ok && before !== id) sfxCore();
+    }
+    void saveSystem.persist();
+    // Refresh wallet display if any text shows balance + the panel itself.
+    this.buildOperatorPanel();
+  }
+
+  private destroyOperatorPanel(): void {
+    for (const o of this.operatorPanelObjects) o.destroy();
+    this.operatorPanelObjects = [];
   }
 }

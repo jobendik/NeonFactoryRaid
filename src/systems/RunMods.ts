@@ -36,10 +36,10 @@ export interface RunMods {
   greedSurgeMult: number;    // 1.0 base, ×1.5 per Greed Surge — multiplicative with greed step
 
   // -------- Drones --------
-  // Multiplier on the operator-applied drone count (M16). Drone Multiplier card
-  // doubles, so default 1, ×2 on pick. Composes with Vanta's +2 by being
-  // applied AFTER operator base sets the count.
-  droneMultiplier: number;
+  // Bonus simultaneous weapon targets per shot. Operators (Vanta: +2) seed
+  // this at raid start; Drone Multiplier card multiplies whatever's already
+  // here ("doubles even if 0"). WeaponSystem adds it to effective targets.
+  bonusWeaponTargets: number;
 }
 
 export function createDefaultRunMods(): RunMods {
@@ -68,6 +68,6 @@ export function createDefaultRunMods(): RunMods {
     magnetStormDurAdd: 0,
     greedSurgeMult: 1.0,
 
-    droneMultiplier: 1,
+    bonusWeaponTargets: 0,
   };
 }
