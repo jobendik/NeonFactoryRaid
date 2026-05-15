@@ -23,6 +23,8 @@ export const Strings = {
   factoryStubTitle: 'FACTORY',
   factoryStubSub: 'Factory hub — Milestone 8',
   factoryDeploy: 'DEPLOY',
+  factorySpm: 'SPM',
+  factoryDeployHint: 'STAND ON PAD TO DEPLOY',
 } as const;
 
 export type StringKey = keyof typeof Strings;

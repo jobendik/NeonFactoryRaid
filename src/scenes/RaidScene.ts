@@ -9,6 +9,7 @@ import { WeaponSystem } from '../systems/WeaponSystem';
 import { ParticleEffects } from '../systems/ParticleEffects';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
 import { GreedSystem } from '../systems/GreedSystem';
+import { Economy } from '../systems/EconomySystem';
 import { Balance } from '../config/Balance';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
@@ -444,6 +445,8 @@ export class RaidScene extends Phaser.Scene {
       cores = Math.floor(cores * 0.5);
       penaltyApplied = true;
     }
+
+    Economy.bankLoot(scrap, cores);
 
     const payload: RaidEndPayload = {
       endState: state,

@@ -188,6 +188,18 @@ export const Balance = {
     waypointEdgeMargin: 50,
     waypointSize: 22,
   },
+  factory: {
+    backgroundColor: '#04080c',
+    generatorPositions: [
+      { x: -380, y: -120 },
+      { x: -380, y: 140 },
+    ] as const,
+    deployPad: { x: 460, y: 0, radius: 70, holdSec: 0.4 },
+    generatorSize: 64,
+    generatorDropOffsetMin: 36,
+    generatorDropOffsetMax: 80,
+    generatorPulseHz: 0.9,
+  },
 } as const;
 
 export type BalanceConfig = typeof Balance;

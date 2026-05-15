@@ -18,7 +18,8 @@ export class BootScene extends Phaser.Scene {
 
     console.log(Strings.bootOk);
 
-    this.scene.start('RaidScene');
+    // Boot lands in the Factory hub - the player chooses when to deploy.
+    this.scene.start('FactoryScene');
     this.scene.launch('HUDScene');
   }
 }

@@ -1,22 +1,31 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
+import { Economy } from '../systems/EconomySystem';
 import type { RaidScene } from './RaidScene';
+import type { FactoryScene } from './FactoryScene';
 
 // HUDScene runs as a persistent overlay above whatever gameplay scene is active.
-// Through Milestone 7 the raid HUD shows everything from §21.1:
-//   - FPS (top-left, dev affordance)
+// Through Milestone 8 it switches between two layouts:
+//
+// Raid mode (§21.1):
 //   - HP bar (top-left, cyan, turns red when low)
-//   - Run loot (top-right, Scrap and Cores)
+//   - Run loot (top-right, Scrap and Cores - the in-progress haul)
 //   - Raid timer (top-center)
 //   - Combo multiplier (below timer, when > 1.0)
 //   - Greed multiplier (below combo, prominent yellow when > 1.0)
 //   - "EXTRACTION OPEN" banner once the pad becomes available
-//   - Off-screen waypoint arrow pointing at the pad when extraction is open and
-//     the pad would otherwise be out of view (per §7.8)
+//   - Off-screen waypoint arrow toward the pad (§7.8)
 //
-// State is read via raid.get*() each frame - the convention settled in the M5
-// gate: scene.get() for per-frame numeric reads, EventBus for discrete events.
+// Factory mode (§21.2):
+//   - Persistent wallet (top-right, Scrap and Cores from saveSystem)
+//   - SPM display (top-center)
+//
+// FPS shows in both modes (dev affordance).
+//
+// State is read via raid.get*() / factory.get*() each frame - the convention
+// settled in the M5 gate: scene.get() for per-frame numeric reads, EventBus
+// for discrete events.
 
 function formatTime(secs: number): string {
   const total = Math.max(0, Math.ceil(secs));
@@ -43,6 +52,8 @@ export class HUDScene extends Phaser.Scene {
   private greedText!: Phaser.GameObjects.Text;
   private extractBanner!: Phaser.GameObjects.Text;
   private waypoint!: Phaser.GameObjects.Graphics;
+  private spmText!: Phaser.GameObjects.Text;
+  private deployText!: Phaser.GameObjects.Text;
   private lastFpsUpdate = 0;
 
   constructor() {
@@ -158,6 +169,32 @@ export class HUDScene extends Phaser.Scene {
 
     this.waypoint = this.add.graphics();
     this.waypoint.setScrollFactor(0).setDepth(2000).setVisible(false);
+
+    this.spmText = this.add
+      .text(cx, 18, '', {
+        fontFamily: 'monospace',
+        fontSize: '24px',
+        color: '#22f6ff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+
+    this.deployText = this.add
+      .text(cx, this.scale.height - 28, '', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#72ff9f',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
   }
 
   override update(time: number): void {
@@ -168,10 +205,23 @@ export class HUDScene extends Phaser.Scene {
     }
 
     const raid = this.scene.get('RaidScene') as RaidScene | undefined;
-    if (!raid || !raid.scene.isActive()) {
-      this.clearRaidHud();
+    if (raid && raid.scene.isActive()) {
+      this.renderRaid(raid);
       return;
     }
+
+    const factory = this.scene.get('FactoryScene') as FactoryScene | undefined;
+    if (factory && factory.scene.isActive()) {
+      this.renderFactory(factory);
+      return;
+    }
+
+    this.clearRaidHud();
+  }
+
+  private renderRaid(raid: RaidScene): void {
+    if (this.spmText.visible) this.spmText.setVisible(false);
+    if (this.deployText.visible) this.deployText.setVisible(false);
 
     const hpInfo = raid.getPlayerHP();
     const ratio = hpInfo.max > 0 ? Math.max(0, hpInfo.hp / hpInfo.max) : 0;
@@ -211,6 +261,36 @@ export class HUDScene extends Phaser.Scene {
     }
   }
 
+  private renderFactory(factory: FactoryScene): void {
+    // Hide raid-only widgets.
+    this.timerText.setText('');
+    this.comboText.setText('');
+    this.greedText.setText('');
+    this.extractBanner.setText('');
+    this.hpBarBg.setVisible(false);
+    this.hpBarFill.setVisible(false);
+    this.hpText.setText('');
+    this.hpText.setVisible(false);
+    this.waypoint.setVisible(false);
+
+    const wallet = Economy.getWallet();
+    this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
+    this.coresText.setText(`${Strings.summaryCores} ${wallet.cores}`);
+
+    const spm = factory.getSpm();
+    this.spmText.setText(`${Strings.factorySpm}  ${spm.toFixed(0)}`);
+    this.spmText.setVisible(true);
+
+    // Light hint when the player is hovering on the deploy pad.
+    const hold = factory.getDeployHoldRatio();
+    if (hold > 0) {
+      this.deployText.setText(Strings.factoryDeployHint);
+      this.deployText.setVisible(true);
+    } else {
+      this.deployText.setVisible(false);
+    }
+  }
+
   private clearRaidHud(): void {
     this.timerText.setText('');
     this.comboText.setText('');
@@ -223,6 +303,8 @@ export class HUDScene extends Phaser.Scene {
     this.hpBarFill.setVisible(false);
     this.hpText.setVisible(false);
     this.waypoint.setVisible(false);
+    if (this.spmText) this.spmText.setVisible(false);
+    if (this.deployText) this.deployText.setVisible(false);
   }
 
   private drawWaypoint(raid: RaidScene, padX: number, padY: number): void {
