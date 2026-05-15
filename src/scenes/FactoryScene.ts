@@ -22,6 +22,8 @@ import { StreakSystem } from '../systems/StreakSystem';
 import { LeaderboardSystem } from '../systems/LeaderboardSystem';
 import { todayUtcDate } from '../config/QuestDefs';
 import { AdManager } from '../platform/AdManager';
+import { CosmeticSystem } from '../systems/CosmeticSystem';
+import { SeasonSystem } from '../systems/SeasonSystem';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -79,6 +81,10 @@ export class FactoryScene extends Phaser.Scene {
   // Pinned try-out toast (shown briefly after the player accepts the
   // OPERATOR TRY-OUT ad). Destroyed automatically.
   private tryOutToast: Phaser.GameObjects.Text | null = null;
+  // M23 — season pass progress panel. Pinned top-center; built once on
+  // create() and refreshed when a season tier is reached.
+  private seasonPanelObjects: Phaser.GameObjects.GameObject[] = [];
+  private onSeasonTierReached = (..._args: unknown[]): void => this.buildSeasonPanel();
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -131,6 +137,8 @@ export class FactoryScene extends Phaser.Scene {
     this.buildQuestPanel();
     this.buildDailySeedAndLeaderboardButtons();
     this.buildAdPanel();
+    this.buildSeasonPanel();
+    bus.on(Events.SEASON_TIER_REACHED, this.onSeasonTierReached);
     MusicEngine.startFactory();
   }
 
@@ -244,6 +252,8 @@ export class FactoryScene extends Phaser.Scene {
     this.destroyQuestPanel();
     this.destroyDailySeedAndLeaderboard();
     this.destroyAdPanel();
+    this.destroySeasonPanel();
+    bus.off(Events.SEASON_TIER_REACHED, this.onSeasonTierReached);
     this.tryOutToast?.destroy();
     this.tryOutToast = null;
   }
@@ -520,7 +530,10 @@ export class FactoryScene extends Phaser.Scene {
   private drawBackground(): void {
     const wb = Balance.player.worldBounds;
     const grid = this.add.graphics();
-    grid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha);
+    // M23 — equipped factory theme tints the grid lines. Defaults to the
+    // base background color so unequipped saves render unchanged.
+    const themeColor = CosmeticSystem.getEquippedThemeColor() || Balance.colors.background;
+    grid.lineStyle(1, themeColor, Balance.ui.gridAlpha);
     const step = Balance.ui.gridStep;
     for (let x = wb.minX; x <= wb.maxX; x += step) {
       grid.moveTo(x, wb.minY);
@@ -1490,6 +1503,64 @@ export class FactoryScene extends Phaser.Scene {
         onComplete: () => toast.destroy(),
       });
     });
+  }
+
+  // M23 — small season pass progress panel pinned top-center. Shows current
+  // tier + XP bar. Refreshed when a SEASON_TIER_REACHED event fires.
+  private buildSeasonPanel(): void {
+    this.destroySeasonPanel();
+    // Gate behind tutorial completion — first-time players don't need extra
+    // numbers on screen.
+    if (!saveSystem.get().tutorialDone) return;
+    const prog = SeasonSystem.getProgress();
+    const x = this.scale.width / 2;
+    const y = 12;
+    const w = 220;
+    const h = 28;
+    const bg = this.add
+      .rectangle(x, y, w, h, 0x0a1014, 0.85)
+      .setOrigin(0.5, 0)
+      .setStrokeStyle(2, 0xa76cff, 0.7)
+      .setScrollFactor(0)
+      .setDepth(2050);
+    this.seasonPanelObjects.push(bg);
+    const trackTag = prog.premium ? Strings.seasonPremiumTag : Strings.seasonFreeTag;
+    const label = this.add
+      .text(x, y + 4, `${Strings.seasonTierPrefix}${prog.tier}${Strings.seasonTierMid}${prog.max}${trackTag}`, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#a76cff',
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.seasonPanelObjects.push(label);
+    // XP bar (small).
+    const barW = w - 24;
+    const barH = 6;
+    const barX = x - barW / 2;
+    const barY = y + h - barH - 4;
+    const barBg = this.add
+      .rectangle(barX, barY, barW, barH, 0x222a36, 1)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.4)
+      .setScrollFactor(0)
+      .setDepth(2051);
+    this.seasonPanelObjects.push(barBg);
+    const ratio = Math.max(0, Math.min(1, prog.xp / Math.max(1, prog.xpPerTier)));
+    const barFill = this.add
+      .rectangle(barX + 1, barY + 1, Math.max(0, (barW - 2) * ratio), barH - 2, 0xa76cff, 1)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2052);
+    this.seasonPanelObjects.push(barFill);
+  }
+
+  private destroySeasonPanel(): void {
+    for (const o of this.seasonPanelObjects) o.destroy();
+    this.seasonPanelObjects = [];
   }
 
   // M20 OPERATOR TRY-OUT — handler called from the operator tile's "TRY IN

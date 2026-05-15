@@ -34,6 +34,8 @@ import { SDKBridge } from '../platform/SDKBridge';
 import { AdManager } from '../platform/AdManager';
 import { SpatialGrid } from '../systems/SpatialGrid';
 import { QualityManager } from '../systems/QualityManager';
+import { AchievementSystem } from '../systems/AchievementSystem';
+import { SeasonSystem } from '../systems/SeasonSystem';
 import {
   sfxCore,
   sfxScrap,
@@ -1110,6 +1112,14 @@ export class RaidScene extends Phaser.Scene {
     const save = saveSystem.get();
     save.tryOutOperator = null;
     save.lastRaidDate = todayUtcDateForLeaderboard();
+
+    // M23 — achievements + season XP per blueprint §10.4 / §16.5. Both run
+    // AFTER FtueProgress so raidsCompleted is current; both are no-ops on
+    // tutorial raids.
+    if (!this.isTutorial) {
+      AchievementSystem.handleRaidEnd({ state, greedMult, tutorial: this.isTutorial });
+      SeasonSystem.awardRaidXp();
+    }
 
     // Persist immediately on raid-end so the player can't lose loot to a tab
     // close on the summary screen. The 10s autosave and the RAID_ENDED handler

@@ -4,6 +4,7 @@ import { bus, Events } from '../core/EventBus';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
 import { PARTICLE_TEXTURE_KEY } from '../systems/ParticleEffects';
+import { CosmeticSystem } from '../systems/CosmeticSystem';
 import type { RunMods } from '../systems/RunMods';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
@@ -69,6 +70,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.hp = this.maxHp;
     this.speed = UpgradeEffects.playerSpeed();
     this.initThruster(scene);
+    // M23 — apply equipped ship-skin tint. 'skin-default' uses 0xffffff
+    // (a no-op tint) so unmodified ships render with their texture color.
+    this.setTint(CosmeticSystem.getEquippedSkinColor());
   }
 
   // Create the thruster emitter once per Player. Idle by default; tickThruster
@@ -189,12 +193,15 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const tailX = this.x - Math.cos(this.facing) * 18;
     const tailY = this.y - Math.sin(this.facing) * 18;
     this.thruster.setPosition(tailX, tailY);
-    // Bright yellow during dash, cyan otherwise. Only emit when actually
-    // moving — a stopped ship reads cleaner without trail churn.
+    // Bright yellow during dash, equipped-trail color otherwise. Only emit
+    // when actually moving — a stopped ship reads cleaner without trail churn.
     const moving = Math.hypot(this.vx, this.vy) > 24;
     if (moving && !this.thruster.emitting) this.thruster.start();
     else if (!moving && this.thruster.emitting) this.thruster.stop();
-    this.thruster.setParticleTint(this.isDashing() ? Balance.colors.playerDashAccent : Balance.colors.player);
+    const trailColor = this.isDashing()
+      ? Balance.colors.playerDashAccent
+      : CosmeticSystem.getEquippedTrailColor();
+    this.thruster.setParticleTint(trailColor);
   }
 
   private startDash(input: PlayerInput): void {

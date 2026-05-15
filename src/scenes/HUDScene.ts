@@ -7,6 +7,9 @@ import { MuteButton } from '../ui/MuteButton';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { AudioBus } from '../audio/AudioBus';
 import { QualityManager } from '../systems/QualityManager';
+import { saveSystem } from '../platform/SaveSystem';
+import { bus, Events } from '../core/EventBus';
+import { AchievementDefs, type AchievementId } from '../systems/AchievementSystem';
 import type { RaidScene } from './RaidScene';
 import type { FactoryScene } from './FactoryScene';
 
@@ -65,6 +68,8 @@ export class HUDScene extends Phaser.Scene {
   private hpText!: Phaser.GameObjects.Text;
   private scrapText!: Phaser.GameObjects.Text;
   private coresText!: Phaser.GameObjects.Text;
+  // M23 — premium currency display, factory mode only.
+  private tokensText!: Phaser.GameObjects.Text;
   private timerText!: Phaser.GameObjects.Text;
   private comboText!: Phaser.GameObjects.Text;
   private greedText!: Phaser.GameObjects.Text;
@@ -153,6 +158,22 @@ export class HUDScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(2000);
+
+    // M23 — Neon Tokens wallet display, factory mode only. Renders below
+    // cores when the player has any tokens or when the premium store is
+    // surfaced via the cosmetics menu.
+    this.tokensText = this.add
+      .text(rightX, 62, '', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#a76cff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
 
     this.timerText = this.add
       .text(cx, 18, '', {
@@ -296,6 +317,49 @@ export class HUDScene extends Phaser.Scene {
     if (keyboard) {
       keyboard.on('keydown-BACKTICK', () => this.togglePerfOverlay());
     }
+
+    // M23 — achievement unlock toast bridge. AchievementSystem emits
+    // ACHIEVEMENT_UNLOCKED with the id; HUDScene composes the toast
+    // copy from AchievementDefs so the system is self-contained.
+    bus.on(Events.ACHIEVEMENT_UNLOCKED, (...args: unknown[]) => {
+      const id = args[0] as AchievementId | undefined;
+      if (!id) return;
+      const def = AchievementDefs[id];
+      if (!def) return;
+      this.showAchievementToast(`${Strings.achievementUnlockedPrefix}${def.name}`);
+    });
+  }
+
+  private showAchievementToast(text: string): void {
+    const t = this.add
+      .text(this.scale.width / 2, 100, text, {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        color: '#ffd75a',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#0a1014',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2250)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      y: 120,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(3800, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => t.destroy(),
+      });
+    });
   }
 
   private togglePerfOverlay(): void {
@@ -470,6 +534,7 @@ export class HUDScene extends Phaser.Scene {
   private renderRaid(raid: RaidScene): void {
     if (this.spmText.visible) this.spmText.setVisible(false);
     if (this.deployText.visible) this.deployText.setVisible(false);
+    if (this.tokensText.visible) this.tokensText.setVisible(false);
 
     const hpInfo = raid.getPlayerHP();
     const ratio = hpInfo.max > 0 ? Math.max(0, hpInfo.hp / hpInfo.max) : 0;
@@ -617,6 +682,14 @@ export class HUDScene extends Phaser.Scene {
     const wallet = Economy.getWallet();
     this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
     this.coresText.setText(`${Strings.summaryCores} ${wallet.cores}`);
+    // M23 — token wallet display. Shown only on factory mode; raid HUD
+    // suppresses it (no token spend during raids).
+    const tokens = saveSystem.get().tokens ?? 0;
+    if (tokens > 0) {
+      this.tokensText.setText(`${Strings.walletTokens} ${tokens}`).setVisible(true);
+    } else {
+      this.tokensText.setVisible(false);
+    }
 
     const spm = factory.getSpm();
     this.spmText.setText(`${Strings.factorySpm}  ${spm.toFixed(0)}`);
@@ -647,6 +720,7 @@ export class HUDScene extends Phaser.Scene {
     if (this.spmText) this.spmText.setVisible(false);
     if (this.deployText) this.deployText.setVisible(false);
     if (this.cleanseText) this.cleanseText.setVisible(false);
+    if (this.tokensText) this.tokensText.setVisible(false);
     if (this.shieldPip) this.hideAllPips();
   }
 

@@ -5,6 +5,7 @@ import { startAutoSave } from '../platform/AutoSave';
 import { Economy } from '../systems/EconomySystem';
 import { Strings } from '../config/Strings';
 import { DailyQuestSystem } from '../systems/DailyQuestSystem';
+import { AchievementSystem } from '../systems/AchievementSystem';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -37,6 +38,10 @@ export class BootScene extends Phaser.Scene {
     // boot so quest progress accrues even on the first tutorial raid (the
     // claim panel itself is gated on tutorialDone + first real raid).
     DailyQuestSystem.init();
+    // M23 — AchievementSystem subscribes to PLAYER_DAMAGED + PICKUP_COLLECTED
+    // for transient per-raid flags; the per-end audit is driven explicitly
+    // from RaidScene.finishRaid.
+    AchievementSystem.init();
 
     startAutoSave();
     SDKBridge.loadingStop();

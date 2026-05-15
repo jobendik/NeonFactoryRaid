@@ -185,6 +185,30 @@ export const Strings = {
   adRewardCore: '+1 Core from crate',
   adRewardFailed: 'Ad failed — try again later',
   adTryOutToast: 'Try-out queued — deploy to play one raid',
+
+  // M23 — premium currency + cosmetics + achievements + season pass.
+  walletTokens: 'TOKENS',
+  buyTokensButton: 'BUY TOKENS',
+  buyTokensSoonTitle: 'PREMIUM STORE',
+  buyTokensSoonBody: 'Premium store coming soon.',
+  cosmeticsMenuButton: 'COSMETICS',
+  cosmeticsMenuTitle: 'COSMETICS',
+  cosmeticsTabTrail: 'TRAILS',
+  cosmeticsTabSkin: 'SHIPS',
+  cosmeticsTabTheme: 'THEMES',
+  cosmeticsEquipped: 'EQUIPPED',
+  cosmeticsEquip: 'EQUIP',
+  cosmeticsLockedPrefix: 'Locked — ',
+  achievementsMenuButton: 'ACHIEVEMENTS',
+  achievementsMenuTitle: 'ACHIEVEMENTS',
+  achievementUnlockedPrefix: 'ACHIEVEMENT: ',
+  achievementLockedLabel: '— Locked —',
+  achievementDeferredLabel: 'Coming soon',
+  seasonPanelTitle: 'SEASON PASS',
+  seasonTierPrefix: 'Tier ',
+  seasonTierMid: ' / ',
+  seasonPremiumTag: ' (Premium)',
+  seasonFreeTag: ' (Free)',
 } as const;
 
 export type StringKey = keyof typeof Strings;

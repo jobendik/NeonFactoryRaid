@@ -2,6 +2,10 @@ import Phaser from 'phaser';
 import { AudioBus, type AudioVolumes } from '../audio/AudioBus';
 import { QualityManager } from '../systems/QualityManager';
 import { saveSystem, type QualityPreset } from '../platform/SaveSystem';
+import { Strings } from '../config/Strings';
+import { CosmeticDefs, cosmeticsOfKind, type CosmeticKind } from '../config/CosmeticDefs';
+import { CosmeticSystem } from '../systems/CosmeticSystem';
+import { AchievementSystem, AchievementDefs, ACHIEVEMENT_ORDER } from '../systems/AchievementSystem';
 
 // SettingsMenu scaffold per blueprint §21.6. M13 ships only audio controls:
 // Master / Music / SFX sliders. Quality, key bindings, and the reset-save
@@ -23,7 +27,7 @@ interface SliderHandle {
 }
 
 const PANEL_W = 420;
-const PANEL_H = 440;
+const PANEL_H = 520;
 const ROW_Y_GAP = 56;
 const SLIDER_W = 240;
 const SLIDER_H = 14;
@@ -39,6 +43,10 @@ export class SettingsMenu {
   // M21 — quality preset row + auto-detect toggle. Built once per open();
   // mutating them rebuilds the row to reflect the new active state.
   private qualityRowObjects: Phaser.GameObjects.GameObject[] = [];
+  // M23 — sub-modals (cosmetics, achievements) launched from the settings
+  // panel. Each is a self-contained overlay; only one at a time.
+  private subModalRoot: Phaser.GameObjects.Container | null = null;
+  private subModalBackdrop: Phaser.GameObjects.Rectangle | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -97,6 +105,17 @@ export class SettingsMenu {
     // M21 — quality preset row + auto-detect toggle below the audio sliders.
     this.buildQualityRow(80 + channels.length * ROW_Y_GAP + 10);
 
+    // M23 — cosmetics + achievements menu buttons. Both open sub-modals;
+    // the SettingsMenu stays beneath them so closing the sub-modal returns
+    // the player here.
+    const subY = 80 + channels.length * ROW_Y_GAP + 130;
+    this.buildSubMenuButton(PANEL_W / 4, subY, Strings.cosmeticsMenuButton, () =>
+      this.openCosmeticsModal(),
+    );
+    this.buildSubMenuButton((PANEL_W * 3) / 4, subY, Strings.achievementsMenuButton, () =>
+      this.openAchievementsModal(),
+    );
+
     const closeBtn = scene.add
       .rectangle(PANEL_W / 2, PANEL_H - 44, 140, 36, 0x22f6ff, 1)
       .setOrigin(0.5, 0.5)
@@ -125,10 +144,32 @@ export class SettingsMenu {
     this.dragHandle = null;
     this.sliders = [];
     this.qualityRowObjects = [];
+    this.closeSubModal();
     this.root?.destroy(true);
     this.root = null;
     this.backdrop?.destroy();
     this.backdrop = null;
+  }
+
+  private buildSubMenuButton(x: number, y: number, label: string, onClick: () => void): void {
+    if (!this.root) return;
+    const scene = this.scene;
+    const bw = 150;
+    const bh = 36;
+    const bg = scene.add
+      .rectangle(x, y, bw, bh, 0x22f6ff, 0.18)
+      .setStrokeStyle(2, 0x22f6ff, 0.85)
+      .setInteractive({ useHandCursor: true });
+    bg.on('pointerdown', onClick);
+    const labelText = scene.add
+      .text(x, y, label, {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#22f6ff',
+      })
+      .setOrigin(0.5);
+    this.root.add(bg);
+    this.root.add(labelText);
   }
 
   // M21 — quality preset selector + auto-detect toggle (§24.3 / §24.4).
@@ -297,5 +338,349 @@ export class SettingsMenu {
     h.knob.x = h.trackX + h.trackW * v - KNOB_W / 2;
     h.fill.setSize(Math.max(0, h.trackW * v - 2), SLIDER_H - 2);
     h.valueText.setText(`${Math.round(v * 100)}%`);
+  }
+
+  // M23 — sub-modal lifecycle. Only one open at a time; each rebuilds from
+  // scratch on open() so the displayed state always matches save data.
+  private openCosmeticsModal(): void {
+    this.closeSubModal();
+    const scene = this.scene;
+    const w = scene.scale.width;
+    const h = scene.scale.height;
+    const pW = 540;
+    const pH = 460;
+    this.subModalBackdrop = scene.add
+      .rectangle(0, 0, w, h, 0x000000, 0.82)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3300)
+      .setInteractive();
+    this.subModalBackdrop.on('pointerdown', () => this.closeSubModal());
+    this.subModalRoot = scene.add.container(w / 2 - pW / 2, h / 2 - pH / 2);
+    this.subModalRoot.setDepth(3301);
+    const panel = scene.add
+      .rectangle(0, 0, pW, pH, 0x101820, 0.98)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, 0xa76cff, 0.9);
+    this.subModalRoot.add(panel);
+    const title = scene.add
+      .text(pW / 2, 18, Strings.cosmeticsMenuTitle, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: '#a76cff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0);
+    this.subModalRoot.add(title);
+
+    const sections: Array<{ kind: CosmeticKind; label: string }> = [
+      { kind: 'trail', label: Strings.cosmeticsTabTrail },
+      { kind: 'skin', label: Strings.cosmeticsTabSkin },
+      { kind: 'theme', label: Strings.cosmeticsTabTheme },
+    ];
+    let cursorY = 56;
+    for (const s of sections) {
+      this.buildCosmeticSection(s.label, s.kind, cursorY, pW);
+      cursorY += 110;
+    }
+
+    const buyY = pH - 64;
+    const buyBg = scene.add
+      .rectangle(pW / 2 - 110, buyY, 160, 36, 0xa76cff, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setInteractive({ useHandCursor: true });
+    buyBg.on('pointerdown', () => this.openBuyTokensStub());
+    this.subModalRoot.add(buyBg);
+    this.subModalRoot.add(
+      scene.add
+        .text(pW / 2 - 110, buyY, Strings.buyTokensButton, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5),
+    );
+    const closeBg = scene.add
+      .rectangle(pW / 2 + 110, buyY, 160, 36, 0x22f6ff, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setInteractive({ useHandCursor: true });
+    closeBg.on('pointerdown', () => this.closeSubModal());
+    this.subModalRoot.add(closeBg);
+    this.subModalRoot.add(
+      scene.add
+        .text(pW / 2 + 110, buyY, 'CLOSE', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5),
+    );
+  }
+
+  private buildCosmeticSection(
+    label: string,
+    kind: CosmeticKind,
+    y: number,
+    panelW: number,
+  ): void {
+    if (!this.subModalRoot) return;
+    const scene = this.scene;
+    this.subModalRoot.add(
+      scene.add
+        .text(20, y, label, {
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          color: '#88a0a8',
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0, 0),
+    );
+    const items = cosmeticsOfKind(kind);
+    const equipped = CosmeticSystem.getEquipped(kind);
+    const tileW = 160;
+    const tileH = 70;
+    const gap = 8;
+    const startX = 20;
+    const startY = y + 18;
+    const cap = Math.floor((panelW - startX * 2 + gap) / (tileW + gap));
+    for (let i = 0; i < Math.min(items.length, cap); i++) {
+      const it = items[i];
+      const x = startX + i * (tileW + gap);
+      const owned = CosmeticSystem.isOwned(it.id);
+      const isEquipped = equipped === it.id;
+      const bg = scene.add
+        .rectangle(x, startY, tileW, tileH, owned ? it.color : 0x222a36, owned ? 0.5 : 0.85)
+        .setOrigin(0, 0)
+        .setStrokeStyle(isEquipped ? 3 : 1, isEquipped ? 0xffffff : 0xffffff, isEquipped ? 1 : 0.4);
+      this.subModalRoot.add(bg);
+      this.subModalRoot.add(
+        scene.add
+          .text(x + 8, startY + 6, it.name, {
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            color: owned ? '#ffffff' : '#888888',
+          })
+          .setOrigin(0, 0),
+      );
+      this.subModalRoot.add(
+        scene.add
+          .text(x + 8, startY + 22, it.description, {
+            fontFamily: 'monospace',
+            fontSize: '9px',
+            color: owned ? '#88a0a8' : '#555555',
+            wordWrap: { width: tileW - 16 },
+          })
+          .setOrigin(0, 0),
+      );
+      if (!owned) {
+        this.subModalRoot.add(
+          scene.add
+            .text(x + 8, startY + tileH - 16, `${Strings.cosmeticsLockedPrefix}${it.unlockCondition}`, {
+              fontFamily: 'monospace',
+              fontSize: '8px',
+              color: '#ffd75a',
+              wordWrap: { width: tileW - 16 },
+            })
+            .setOrigin(0, 0),
+        );
+      } else {
+        this.subModalRoot.add(
+          scene.add
+            .text(x + tileW - 8, startY + tileH - 16, isEquipped ? Strings.cosmeticsEquipped : Strings.cosmeticsEquip, {
+              fontFamily: 'monospace',
+              fontSize: '10px',
+              color: isEquipped ? '#72ff9f' : '#22f6ff',
+            })
+            .setOrigin(1, 0),
+        );
+        if (!isEquipped) {
+          bg.setInteractive({ useHandCursor: true });
+          bg.on('pointerdown', () => {
+            CosmeticSystem.equip(it.id);
+            void saveSystem.persist();
+            this.openCosmeticsModal();
+          });
+        }
+      }
+    }
+    // Unused — keeps the def import live for callers that pull descriptions
+    // outside this helper (e.g. future tooltip work).
+    void CosmeticDefs;
+  }
+
+  private openBuyTokensStub(): void {
+    const scene = this.scene;
+    const w = scene.scale.width;
+    const h = scene.scale.height;
+    const layer: Phaser.GameObjects.GameObject[] = [];
+    const bd = scene.add
+      .rectangle(0, 0, w, h, 0x000000, 0.6)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3500)
+      .setInteractive();
+    layer.push(bd);
+    const panel = scene.add
+      .rectangle(w / 2, h / 2, 420, 180, 0x101820, 0.98)
+      .setStrokeStyle(2, 0xa76cff, 0.95)
+      .setScrollFactor(0)
+      .setDepth(3501);
+    layer.push(panel);
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 - 50, Strings.buyTokensSoonTitle, {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          color: '#a76cff',
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 - 8, Strings.buyTokensSoonBody, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#ffffff',
+          align: 'center',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3502),
+    );
+    const dismissBg = scene.add
+      .rectangle(w / 2, h / 2 + 50, 140, 36, 0xa76cff, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setScrollFactor(0)
+      .setDepth(3502)
+      .setInteractive({ useHandCursor: true });
+    layer.push(dismissBg);
+    layer.push(
+      scene.add
+        .text(w / 2, h / 2 + 50, 'OK', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(3503),
+    );
+    const dismiss = (): void => {
+      for (const o of layer) o.destroy();
+    };
+    bd.on('pointerdown', dismiss);
+    dismissBg.on('pointerdown', dismiss);
+  }
+
+  private openAchievementsModal(): void {
+    this.closeSubModal();
+    const scene = this.scene;
+    const w = scene.scale.width;
+    const h = scene.scale.height;
+    const pW = 520;
+    const pH = 460;
+    this.subModalBackdrop = scene.add
+      .rectangle(0, 0, w, h, 0x000000, 0.82)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(3300)
+      .setInteractive();
+    this.subModalBackdrop.on('pointerdown', () => this.closeSubModal());
+    this.subModalRoot = scene.add.container(w / 2 - pW / 2, h / 2 - pH / 2);
+    this.subModalRoot.setDepth(3301);
+    const panel = scene.add
+      .rectangle(0, 0, pW, pH, 0x101820, 0.98)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, 0xffd75a, 0.9);
+    this.subModalRoot.add(panel);
+    this.subModalRoot.add(
+      scene.add
+        .text(pW / 2, 18, Strings.achievementsMenuTitle, {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          color: '#ffd75a',
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5, 0),
+    );
+
+    const startY = 60;
+    const rowH = 42;
+    for (let i = 0; i < ACHIEVEMENT_ORDER.length; i++) {
+      const id = ACHIEVEMENT_ORDER[i];
+      const def = AchievementDefs[id];
+      const unlocked = AchievementSystem.isUnlocked(id);
+      const rowY = startY + i * rowH;
+      const color = def.deferred ? '#555555' : unlocked ? '#72ff9f' : '#88a0a8';
+      this.subModalRoot.add(
+        scene.add
+          .rectangle(20, rowY, pW - 40, rowH - 4, 0x0a1014, 0.6)
+          .setOrigin(0, 0)
+          .setStrokeStyle(1, unlocked ? 0x72ff9f : 0x222a36, unlocked ? 0.9 : 0.5),
+      );
+      this.subModalRoot.add(
+        scene.add
+          .text(32, rowY + 6, def.name, {
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            color,
+          })
+          .setOrigin(0, 0),
+      );
+      this.subModalRoot.add(
+        scene.add
+          .text(32, rowY + 22, def.description, {
+            fontFamily: 'monospace',
+            fontSize: '10px',
+            color: '#88a0a8',
+          })
+          .setOrigin(0, 0),
+      );
+      const statusText = def.deferred
+        ? Strings.achievementDeferredLabel
+        : unlocked
+          ? '✓'
+          : Strings.achievementLockedLabel;
+      this.subModalRoot.add(
+        scene.add
+          .text(pW - 32, rowY + (rowH - 4) / 2, statusText, {
+            fontFamily: 'monospace',
+            fontSize: unlocked && !def.deferred ? '18px' : '10px',
+            color,
+          })
+          .setOrigin(1, 0.5),
+      );
+    }
+
+    const closeY = pH - 36;
+    const closeBg = scene.add
+      .rectangle(pW / 2, closeY, 140, 36, 0xffd75a, 1)
+      .setStrokeStyle(2, 0xffffff, 0.9)
+      .setInteractive({ useHandCursor: true });
+    closeBg.on('pointerdown', () => this.closeSubModal());
+    this.subModalRoot.add(closeBg);
+    this.subModalRoot.add(
+      scene.add
+        .text(pW / 2, closeY, 'CLOSE', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#000000',
+        })
+        .setOrigin(0.5),
+    );
+  }
+
+  private closeSubModal(): void {
+    this.subModalRoot?.destroy(true);
+    this.subModalRoot = null;
+    this.subModalBackdrop?.destroy();
+    this.subModalBackdrop = null;
   }
 }
