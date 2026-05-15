@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: './',
+  base: '/NeonFactoryRaid/',
   publicDir: 'public',
   build: {
     target: 'es2020',
