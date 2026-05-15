@@ -274,6 +274,15 @@ export const Balance = {
     minPullSpeed: 220,
     maxPullSpeed: 880,
     pickupLifespanSec: 14,
+    // M22 §8.5 — Magnet Lv. 5 orbit-before-collection. orbitEntryRadius is
+    // the distance at which the orbit phase engages; orbitRadius is the
+    // ring the pickups trace around the player; orbitDurationSec is how
+    // long the dance lasts before final beeline; orbitSpeedRad is the
+    // angular velocity (full revolution per ~0.6s).
+    orbitEntryRadius: 60,
+    orbitRadius: 36,
+    orbitDurationSec: 0.3,
+    orbitSpeedRad: 10.0,
   },
   shooter: {
     desiredDistance: 280,
@@ -302,7 +311,9 @@ export const Balance = {
     momentRingDurationMs: 800,
     flyInSpeed: 1600,
     waypointEdgeMargin: 50,
-    waypointSize: 22,
+    // M22 HUD pass — waypoint arrow size bumped from 22 → 28 so it reads
+    // clearly at mobile size; HUDScene also strokes it with a thicker outline.
+    waypointSize: 28,
   },
   // §12 in-run drafting. Card numerics are sourced from the blueprint's card
   // list; tweaking here is a one-file pass for balance.

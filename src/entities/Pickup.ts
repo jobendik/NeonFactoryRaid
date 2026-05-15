@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import { PARTICLE_TEXTURE_KEY } from '../systems/ParticleEffects';
+import { saveSystem } from '../platform/SaveSystem';
 import type { Rng } from '../core/Rng';
 
 export type PickupType = 'scrap' | 'core';
@@ -17,6 +19,14 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
   value = 1;
   private body_!: Phaser.Physics.Arcade.Body;
   private age = 0;
+  // M22 §8.5 Magnet Lv. 5: pickups briefly orbit the player before final
+  // collection. orbitTimer counts up while in orbit phase; once it exceeds
+  // orbitDurationSec, the pickup beelines and is collected as usual.
+  private orbitTimer = 0;
+  private orbitAngle = 0;
+  // M22 §8.5 Luck Lv. 5: core pickups leave a gold sparkle trail. One small
+  // emitter per active core; cleared on kill.
+  private sparkleEmitter: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Pickup.ensureTextures(scene);
@@ -38,6 +48,7 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.setActive(true).setVisible(true);
     this.setAlpha(1);
     this.age = 0;
+    this.orbitTimer = 0;
 
     const angle = rng ? rng.next() * Math.PI * 2 : Math.random() * Math.PI * 2;
     const speed = rng
@@ -45,6 +56,10 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
       : Phaser.Math.Between(Balance.magnet.popOutSpeedMin, Balance.magnet.popOutSpeedMax);
     this.body_.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
     this.body_.setDrag(Balance.magnet.popOutDrag, Balance.magnet.popOutDrag);
+
+    // §8.5 Luck Lv. 5 — gold sparkle trail on core pickups. The emitter is
+    // owned per-pickup (released on kill) since cores are short-lived.
+    this.refreshSparkleEmitter();
   }
 
   // Used by the extraction "moment": every active pickup beelines to the player
@@ -63,11 +78,41 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.body_.setVelocity(0, 0);
     this.body_.enable = false;
     this.setActive(false).setVisible(false);
+    if (this.sparkleEmitter) {
+      this.sparkleEmitter.destroy();
+      this.sparkleEmitter = null;
+    }
+  }
+
+  // Build (or skip) the gold sparkle emitter per Luck Lv. 5. Idempotent —
+  // calling on a non-core pickup or a low-luck save is a no-op.
+  private refreshSparkleEmitter(): void {
+    if (this.sparkleEmitter) {
+      this.sparkleEmitter.destroy();
+      this.sparkleEmitter = null;
+    }
+    if (this.type !== 'core') return;
+    const luck = saveSystem.get().upgrades.luck;
+    if (luck < 5) return;
+    if (!this.scene.textures.exists(PARTICLE_TEXTURE_KEY)) return;
+    this.sparkleEmitter = this.scene.add.particles(0, 0, PARTICLE_TEXTURE_KEY, {
+      speed: { min: 20, max: 60 },
+      scale: { start: 0.6, end: 0 },
+      alpha: { start: 0.9, end: 0 },
+      lifespan: 420,
+      tint: Balance.colors.core,
+      frequency: 70,
+    });
+    this.sparkleEmitter.setDepth(this.depth - 1);
   }
 
   // Pulls the pickup toward the player when within magnetRadius.
   // Speed scales linearly: minPullSpeed at the edge of magnetRadius,
   // maxPullSpeed when nearly on top of the player.
+  // M22 §8.5 Magnet Lv. 5: when the pickup gets within the orbit-entry
+  // radius, it spends `orbitDurationSec` orbiting the player at a fixed
+  // radius before final collection. Pure visual flourish — the value lands
+  // identically once the orbit timer expires.
   updateMagnet(dt: number, playerX: number, playerY: number, magnetRadius: number): void {
     if (!this.active) return;
     this.age += dt;
@@ -75,11 +120,45 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
       this.kill();
       return;
     }
+    // Keep the sparkle emitter glued to the pickup each frame.
+    if (this.sparkleEmitter) {
+      this.sparkleEmitter.setPosition(this.x, this.y);
+    }
 
     const dx = playerX - this.x;
     const dy = playerY - this.y;
     const dist = Math.hypot(dx, dy);
     if (dist <= 0.5 || dist > magnetRadius) return;
+
+    const magnetLvl = saveSystem.get().upgrades.magnet;
+    const orbitEnabled = magnetLvl >= 5;
+    const orbitEntryRadius = Balance.magnet.orbitEntryRadius;
+    const orbitRadius = Balance.magnet.orbitRadius;
+
+    // Enter orbit phase the first frame we're inside the orbit-entry
+    // radius (if the milestone is unlocked).
+    if (orbitEnabled && dist <= orbitEntryRadius && this.orbitTimer < Balance.magnet.orbitDurationSec) {
+      if (this.orbitTimer === 0) {
+        // Pick orbit angle from current relative position so the dance
+        // starts where the pickup was. Subsequent frames advance the angle.
+        this.orbitAngle = Math.atan2(this.y - playerY, this.x - playerX);
+      }
+      this.orbitTimer += dt;
+      this.orbitAngle += dt * Balance.magnet.orbitSpeedRad;
+      const ox = playerX + Math.cos(this.orbitAngle) * orbitRadius;
+      const oy = playerY + Math.sin(this.orbitAngle) * orbitRadius;
+      // Snap-position via velocity to keep the body in sync (no teleport).
+      const odx = ox - this.x;
+      const ody = oy - this.y;
+      const odist = Math.hypot(odx, ody);
+      const moveSpeed = Math.max(60, odist / Math.max(0.001, dt));
+      this.body_.setVelocity(
+        (odx / Math.max(0.001, odist)) * moveSpeed,
+        (ody / Math.max(0.001, odist)) * moveSpeed,
+      );
+      this.body_.setDrag(0, 0);
+      return;
+    }
 
     const closeness = 1 - dist / magnetRadius;
     const speed = Phaser.Math.Linear(Balance.magnet.minPullSpeed, Balance.magnet.maxPullSpeed, closeness);

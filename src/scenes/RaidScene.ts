@@ -33,6 +33,7 @@ import { Rng, dailySeed } from '../core/Rng';
 import { SDKBridge } from '../platform/SDKBridge';
 import { AdManager } from '../platform/AdManager';
 import { SpatialGrid } from '../systems/SpatialGrid';
+import { QualityManager } from '../systems/QualityManager';
 import {
   sfxCore,
   sfxScrap,
@@ -939,6 +940,45 @@ export class RaidScene extends Phaser.Scene {
 
   private drawBackground(): void {
     const wb = Balance.player.worldBounds;
+    // M22 §19.5 parallax: optional far + mid layers behind the main grid,
+    // both at lower alpha. Quality preset gates how many layers render —
+    // 0 (Low), 2 (Medium), 3 (High). Layers use a scrollFactor below 1 so
+    // they drift slower than the foreground as the camera follows the
+    // player, giving a subtle depth cue without competing for attention.
+    const layers = QualityManager.parallaxLayers();
+    if (layers >= 1) {
+      const far = this.add.graphics();
+      far.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.5);
+      const stepFar = Balance.ui.gridStep * 1.8;
+      for (let x = wb.minX; x <= wb.maxX; x += stepFar) {
+        far.moveTo(x, wb.minY);
+        far.lineTo(x, wb.maxY);
+      }
+      for (let y = wb.minY; y <= wb.maxY; y += stepFar) {
+        far.moveTo(wb.minX, y);
+        far.lineTo(wb.maxX, y);
+      }
+      far.strokePath();
+      far.setScrollFactor(0.3);
+      far.setDepth(-3);
+    }
+    if (layers >= 2) {
+      const mid = this.add.graphics();
+      mid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.7);
+      const stepMid = Balance.ui.gridStep * 1.25;
+      for (let x = wb.minX; x <= wb.maxX; x += stepMid) {
+        mid.moveTo(x, wb.minY);
+        mid.lineTo(x, wb.maxY);
+      }
+      for (let y = wb.minY; y <= wb.maxY; y += stepMid) {
+        mid.moveTo(wb.minX, y);
+        mid.lineTo(wb.maxX, y);
+      }
+      mid.strokePath();
+      mid.setScrollFactor(0.6);
+      mid.setDepth(-2);
+    }
+
     const grid = this.add.graphics();
     grid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha);
     const step = Balance.ui.gridStep;

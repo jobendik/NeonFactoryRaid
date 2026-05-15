@@ -84,6 +84,12 @@ export class HUDScene extends Phaser.Scene {
   private perfOverlayOn = false;
   // FPS sampling for the rolling auto-detect window.
   private autoDetectAccum = 0;
+  // M22 HUD pass — HP flash: red on damage, green on heal. We snapshot the
+  // last-frame HP and react to deltas. flashTimer counts down to 0 over a
+  // short window where the HP-bar fill color is overridden.
+  private lastHp = -1;
+  private hpFlashColor = 0;
+  private hpFlashTimer = 0;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -161,38 +167,40 @@ export class HUDScene extends Phaser.Scene {
       .setDepth(2000);
 
     // Combo sits just under the raid timer. Smaller / dimmer than greed so
-    // the eye reads the prominent yellow badge first.
+    // the eye reads the prominent yellow badge first. M22: anchor below the
+    // timer rather than to its side so the badges always have vertical
+    // headroom on narrow viewports.
     this.comboText = this.add
-      .text(cx - 200, 24, '', {
+      .text(cx, 52, '', {
         fontFamily: 'monospace',
         fontSize: '15px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 3,
       })
-      .setOrigin(1, 0)
+      .setOrigin(0.5, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     // Greed badge per M14: bigger, brighter, with a contrasting background
-    // pill. Lives on the opposite side of the timer from combo so they
-    // never share screen space.
+    // pill. M22: stacked directly below combo so a narrow viewport never
+    // collides the two readouts. Both center-aligned to the timer.
     this.greedText = this.add
-      .text(cx + 200, 24, '', {
+      .text(cx, 74, '', {
         fontFamily: 'monospace',
-        fontSize: '26px',
+        fontSize: '24px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 5,
         backgroundColor: '#1a0a14',
         padding: { x: 10, y: 4 },
       })
-      .setOrigin(0, 0)
+      .setOrigin(0.5, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     this.extractBanner = this.add
-      .text(cx, 78, '', {
+      .text(cx, 112, '', {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#72ff9f',
@@ -465,8 +473,26 @@ export class HUDScene extends Phaser.Scene {
 
     const hpInfo = raid.getPlayerHP();
     const ratio = hpInfo.max > 0 ? Math.max(0, hpInfo.hp / hpInfo.max) : 0;
+    // M22 HP flash — detect delta vs last frame. Heal → green, damage → red.
+    // Tutorial / first-frame initializes lastHp without flashing.
+    if (this.lastHp >= 0 && hpInfo.hp !== this.lastHp) {
+      const delta = hpInfo.hp - this.lastHp;
+      if (delta < 0) {
+        this.hpFlashColor = 0xff416b;
+        this.hpFlashTimer = 0.22;
+      } else if (delta > 0) {
+        this.hpFlashColor = 0x72ff9f;
+        this.hpFlashTimer = 0.22;
+      }
+    }
+    this.lastHp = hpInfo.hp;
+    let fillColor: number = ratio <= HP_LOW_RATIO ? Balance.colors.danger : Balance.colors.player;
+    if (this.hpFlashTimer > 0) {
+      fillColor = this.hpFlashColor;
+      this.hpFlashTimer = Math.max(0, this.hpFlashTimer - this.game.loop.delta / 1000);
+    }
     this.hpBarFill.setSize(Math.max(0, (HP_BAR_W - 2) * ratio), HP_BAR_H - 2);
-    this.hpBarFill.setFillStyle(ratio <= HP_LOW_RATIO ? Balance.colors.danger : Balance.colors.player, 1);
+    this.hpBarFill.setFillStyle(fillColor, 1);
     this.hpBarBg.setVisible(true);
     this.hpBarFill.setVisible(true);
     this.hpText.setText(`${Strings.hpLabel} ${Math.ceil(hpInfo.hp)} / ${hpInfo.max}`);
@@ -668,7 +694,9 @@ export class HUDScene extends Phaser.Scene {
     this.waypoint.clear();
     this.waypoint.setVisible(true);
     this.waypoint.fillStyle(color, 1);
-    this.waypoint.lineStyle(2, 0xffffff, 0.9);
+    // M22 — thicker stroke so the arrow reads cleanly against the busiest
+    // backgrounds (especially the deep-end greed vignette).
+    this.waypoint.lineStyle(3, 0xffffff, 1);
     this.waypoint.beginPath();
     for (let i = 0; i < localPts.length; i++) {
       const pt = localPts[i];

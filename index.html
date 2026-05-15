@@ -31,9 +31,62 @@
     canvas {
       display: block;
     }
+    /* M22 — HTML preloader shown before Phaser scenes start. Removed by
+       BootScene once the asset load + save migration is complete. */
+    #nfr-preload {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      color: #22f6ff;
+      font-family: monospace, "Courier New", Courier;
+      z-index: 9999;
+      transition: opacity 0.4s ease-out;
+    }
+    #nfr-preload.fading {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #nfr-preload-title {
+      font-size: clamp(28px, 6vw, 56px);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-shadow:
+        0 0 12px rgba(34, 246, 255, 0.65),
+        0 0 30px rgba(34, 246, 255, 0.45);
+      margin: 0 0 32px 0;
+    }
+    #nfr-preload-bar {
+      width: clamp(220px, 50vw, 420px);
+      height: 10px;
+      background: rgba(34, 246, 255, 0.12);
+      border: 1px solid rgba(34, 246, 255, 0.6);
+      overflow: hidden;
+    }
+    #nfr-preload-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #22f6ff;
+      box-shadow: 0 0 12px rgba(34, 246, 255, 0.85);
+      transition: width 0.25s ease-out;
+    }
+    #nfr-preload-status {
+      margin-top: 12px;
+      font-size: 11px;
+      color: rgba(34, 246, 255, 0.6);
+      letter-spacing: 0.2em;
+    }
   </style>
 </head>
 <body>
+  <div id="nfr-preload">
+    <h1 id="nfr-preload-title">NEON FACTORY RAID</h1>
+    <div id="nfr-preload-bar"><div id="nfr-preload-bar-fill"></div></div>
+    <div id="nfr-preload-status">LOADING&hellip;</div>
+  </div>
   <div id="game"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>

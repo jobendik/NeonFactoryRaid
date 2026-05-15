@@ -116,9 +116,14 @@ export class WeaponSystem {
     // by hitting the next-nearest enemies (no actual line geometry yet).
     // BonusTargets comes from operator-granted drones (Vanta: +2 on raid start)
     // and is multiplied by Drone Multiplier card.
-    const splitMult = 1 + this.modSplitShot;
+    // §8.5 milestone effects (M22):
+    //   - Damage Lv. 5  → +1 pierce (an extra enemy hit per fire)
+    //   - Damage Lv. 10 → +1 split shot (fork into two parallel tracers)
+    const upgradePierce = this.damageLevel >= 5 ? 1 : 0;
+    const upgradeSplit = this.damageLevel >= 10 ? 1 : 0;
+    const splitMult = 1 + this.modSplitShot + upgradeSplit;
     const effectiveTargets =
-      this.targetsPerShot * splitMult + this.modPierce + this.modBonusTargets;
+      this.targetsPerShot * splitMult + this.modPierce + upgradePierce + this.modBonusTargets;
     const targets = this.findNearestInRange(effectiveTargets);
     if (targets.length === 0) return [];
 

@@ -3,6 +3,7 @@ import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
+import { PARTICLE_TEXTURE_KEY } from '../systems/ParticleEffects';
 import type { RunMods } from '../systems/RunMods';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
@@ -42,6 +43,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private orbitalShieldRegenSec = 12;
   private orbitalShieldTimer = 0;
   phoenixCharges = 0;
+  // M22 — small thruster particle emitter behind the player. Follows the
+  // sprite each frame; cyan tint that brightens during dash.
+  private thruster: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Player.ensureTexture(scene);
@@ -51,8 +55,12 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setOrigin(0.5);
     this.body_ = this.body as Phaser.Physics.Arcade.Body;
     this.body_.setCollideWorldBounds(true);
-    // Circular hit body slightly smaller than the visible triangle for forgiving collision.
-    this.body_.setCircle(18, 6, 6);
+    // Circular hit body slightly tighter than the new 64px sprite (was 48).
+    // Offsets match the texture's center.
+    this.body_.setCircle(18, 14, 14);
+    // Texture is 64 — center the body offset accordingly. setCircle's offset
+    // is from the top-left of the body box, which Phaser sizes from the
+    // sprite's render size.
 
     // Derive max HP and speed from current upgrade levels at construction time.
     // A new Player is created on each scene re-entry, so this re-reads after
@@ -60,22 +68,73 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.maxHp = UpgradeEffects.playerMaxHp();
     this.hp = this.maxHp;
     this.speed = UpgradeEffects.playerSpeed();
+    this.initThruster(scene);
+  }
+
+  // Create the thruster emitter once per Player. Idle by default; tickThruster
+  // toggles emission based on movement so the trail doesn't sit on a stopped
+  // ship. Depth lives one below the sprite so it reads as "behind".
+  private initThruster(scene: Phaser.Scene): void {
+    if (!scene.textures.exists(PARTICLE_TEXTURE_KEY)) {
+      // ParticleEffects normally seeds the texture but Player is constructed
+      // before that. Safe to re-create — Phaser ignores duplicate keys.
+      const g = scene.add.graphics();
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(3, 3, 2);
+      g.generateTexture(PARTICLE_TEXTURE_KEY, 6, 6);
+      g.destroy();
+    }
+    this.thruster = scene.add.particles(0, 0, PARTICLE_TEXTURE_KEY, {
+      speed: { min: 30, max: 80 },
+      scale: { start: 0.7, end: 0 },
+      alpha: { start: 0.65, end: 0 },
+      lifespan: 320,
+      tint: Balance.colors.player,
+      frequency: 35,
+      emitting: false,
+    });
+    this.thruster.setDepth(this.depth - 1);
   }
 
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(PLAYER_TEXTURE_KEY)) return;
-    const size = 48;
+    const size = 64;
     const g = scene.add.graphics();
-    g.lineStyle(2, Balance.colors.playerOutline, 1);
+    // M22 wedge-ship silhouette per §19.3. Larger texture for legibility at
+    // mobile size; bright cyan body with white outline, a cooler-cyan inner
+    // body line for depth, and a small yellow nose accent that catches the
+    // dash-tint without dominating the resting silhouette.
+    g.lineStyle(3, Balance.colors.playerOutline, 1);
     g.fillStyle(Balance.colors.player, 1);
+    const cy = size * 0.5;
+    const noseX = size * 0.94;
+    const tailY = size * 0.85;
+    const tailY2 = size * 0.15;
+    // Outer hull
     g.beginPath();
-    g.moveTo(size * 0.92, size * 0.5);
-    g.lineTo(size * 0.12, size * 0.12);
-    g.lineTo(size * 0.28, size * 0.5);
-    g.lineTo(size * 0.12, size * 0.88);
+    g.moveTo(noseX, cy);
+    g.lineTo(size * 0.12, tailY2);
+    g.lineTo(size * 0.30, cy);
+    g.lineTo(size * 0.12, tailY);
     g.closePath();
     g.fillPath();
     g.strokePath();
+    // Inner cockpit line (subtle, slightly darker cyan)
+    g.lineStyle(2, 0x14a8c2, 0.85);
+    g.beginPath();
+    g.moveTo(noseX - 4, cy);
+    g.lineTo(size * 0.36, cy - 6);
+    g.lineTo(size * 0.36, cy + 6);
+    g.closePath();
+    g.strokePath();
+    // Yellow nose tip — small triangle inset from the prow.
+    g.fillStyle(Balance.colors.playerDashAccent, 1);
+    g.beginPath();
+    g.moveTo(noseX - 1, cy);
+    g.lineTo(noseX - 9, cy - 4);
+    g.lineTo(noseX - 9, cy + 4);
+    g.closePath();
+    g.fillPath();
     g.generateTexture(PLAYER_TEXTURE_KEY, size, size);
     g.destroy();
   }
@@ -121,6 +180,21 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       this.facing = Math.atan2(this.vy, this.vx);
     }
     this.setRotation(this.facing);
+    this.tickThruster();
+  }
+
+  private tickThruster(): void {
+    if (!this.thruster) return;
+    // Position the emitter just behind the ship's tail along the facing axis.
+    const tailX = this.x - Math.cos(this.facing) * 18;
+    const tailY = this.y - Math.sin(this.facing) * 18;
+    this.thruster.setPosition(tailX, tailY);
+    // Bright yellow during dash, cyan otherwise. Only emit when actually
+    // moving — a stopped ship reads cleaner without trail churn.
+    const moving = Math.hypot(this.vx, this.vy) > 24;
+    if (moving && !this.thruster.emitting) this.thruster.start();
+    else if (!moving && this.thruster.emitting) this.thruster.stop();
+    this.thruster.setParticleTint(this.isDashing() ? Balance.colors.playerDashAccent : Balance.colors.player);
   }
 
   private startDash(input: PlayerInput): void {

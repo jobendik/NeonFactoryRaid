@@ -13,10 +13,15 @@ export class BootScene extends Phaser.Scene {
 
   async create(): Promise<void> {
     this.cameras.main.setBackgroundColor('#000000');
+    // M22 — drive the HTML preloader from BootScene. The init + load steps
+    // are quick enough that a single update on each gate is plenty.
+    BootScene.setHtmlPreloadProgress(0.1);
 
     SDKBridge.loadingStart();
     await SDKBridge.init();
+    BootScene.setHtmlPreloadProgress(0.4);
     await saveSystem.load();
+    BootScene.setHtmlPreloadProgress(0.75);
 
     // Offline production per §8.6 - compute against the just-loaded save, bank
     // the result into the wallet immediately so FactoryScene's HUD shows the
@@ -35,6 +40,8 @@ export class BootScene extends Phaser.Scene {
 
     startAutoSave();
     SDKBridge.loadingStop();
+    BootScene.setHtmlPreloadProgress(1);
+    BootScene.hideHtmlPreload();
 
     console.log(Strings.bootOk);
 
@@ -47,5 +54,24 @@ export class BootScene extends Phaser.Scene {
     } else {
       this.scene.start('FactoryScene');
     }
+  }
+
+  // M22 — HTML preloader bridge. The preload screen in index.html owns its
+  // own DOM and is faded out + removed once boot completes.
+  static setHtmlPreloadProgress(ratio: number): void {
+    if (typeof document === 'undefined') return;
+    const bar = document.getElementById('nfr-preload-bar-fill');
+    if (bar) bar.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
+  }
+
+  static hideHtmlPreload(): void {
+    if (typeof document === 'undefined') return;
+    const node = document.getElementById('nfr-preload');
+    if (!node) return;
+    node.classList.add('fading');
+    // Match the CSS transition (0.4s) plus a small margin to be safe.
+    setTimeout(() => {
+      node.remove();
+    }, 500);
   }
 }
