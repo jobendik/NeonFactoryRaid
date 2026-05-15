@@ -80,8 +80,14 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     return this.hp <= 0;
   }
 
-  tick(dt: number, playerX: number, playerY: number): EnemyTickResult {
+  tick(dt: number, playerX: number, playerY: number, frozen: boolean = false): EnemyTickResult {
     if (!this.active) return { fired: null };
+    if (frozen) {
+      // Freeze Pulse (§13): enemies fully halt - no movement, no fire, no
+      // telegraph charge-up. Visual tint is applied by RaidScene.
+      this.body_.setVelocity(0, 0);
+      return { fired: null };
+    }
     const spec = EnemyDefs[this.kind];
     if (spec.behavior === 'shooter') {
       return this.tickShooter(dt, playerX, playerY);

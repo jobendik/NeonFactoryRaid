@@ -3,18 +3,20 @@ import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { Pickup, type PickupType } from '../entities/Pickup';
 import { Bullet } from '../entities/Bullet';
-import { Drone } from '../entities/Drone';
+import { Powerup } from '../entities/Powerup';
 import { InputSystem } from '../systems/InputSystem';
 import { WaveDirector } from '../systems/WaveDirector';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { ParticleEffects } from '../systems/ParticleEffects';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
 import { GreedSystem } from '../systems/GreedSystem';
+import { PowerupSystem } from '../systems/PowerupSystem';
 import { Economy } from '../systems/EconomySystem';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { EnemyDefs } from '../config/EnemyDefs';
+import { PowerupDefs } from '../config/PowerupDefs';
 import { bus, Events } from '../core/EventBus';
 import { playRisingChord } from '../platform/Audio';
 import { saveSystem } from '../platform/SaveSystem';
@@ -28,19 +30,6 @@ import type {
 type RaidPhase = 'active' | 'extracting' | 'ended';
 
 type TutorialCaptionKey = 'move' | 'dash' | 'powerup' | 'extract';
-
-// M11 placeholder power-ups (Drone Swarm, Magnet Burst). These exist only to
-// fulfill the §5.2 FTUE beats - PowerupSystem in M12 replaces them with proper
-// pooled entities, real definitions in PowerupDefs.ts, and full HUD timer pips.
-// TODO(M12): retire this struct and route through PowerupSystem.
-interface TutorialPowerup {
-  kind: 'droneSwarm' | 'magnetBurst';
-  x: number;
-  y: number;
-  body: Phaser.GameObjects.Graphics;
-  pulse: number;
-  collected: boolean;
-}
 
 // RaidScene drives the raid lifecycle. Through M6 it owns:
 //   - the player, enemies, pickups, bullets pools
@@ -72,15 +61,10 @@ export class RaidScene extends Phaser.Scene {
   private extractTimer = 0;
   private isTutorial = false;
   private elapsed = 0;
-  // FTUE tutorial state
   private captionDoneIdx = -1;
-  private tutorialPowerups: TutorialPowerup[] = [];
-  private droneSwarmExpiresAt = -1;
-  private droneSwarmDrones: Drone[] = [];
-  private magnetBurstExpiresAt = -1;
-  private droneSwarmTriggered = false;
-  private magnetBurstTriggered = false;
   private tutorialBanner: Phaser.GameObjects.Text | null = null;
+  private powerups!: Phaser.GameObjects.Group;
+  private powerupSystem!: PowerupSystem;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => this.greed.start();
@@ -128,9 +112,15 @@ export class RaidScene extends Phaser.Scene {
       maxSize: Balance.shooter.bulletMaxOnField,
       runChildUpdate: false,
     });
+    this.powerups = this.add.group({
+      classType: Powerup,
+      maxSize: Balance.powerups.maxOnField,
+      runChildUpdate: false,
+    });
     this.physics.add.overlap(this.player, this.pickups, this.onPickupOverlap, undefined, this);
     this.physics.add.overlap(this.player, this.enemies, this.onPlayerEnemyOverlap, undefined, this);
     this.physics.add.overlap(this.player, this.bullets, this.onPlayerBulletOverlap, undefined, this);
+    this.physics.add.overlap(this.player, this.powerups, this.onPowerupOverlap, undefined, this);
 
     this.waveDirector = new WaveDirector(this.enemies, () => ({
       x: this.player.x,
@@ -168,6 +158,19 @@ export class RaidScene extends Phaser.Scene {
 
     this.greed = new GreedSystem();
 
+    this.powerupSystem = new PowerupSystem(
+      this,
+      this.powerups,
+      () => ({ x: this.player.x, y: this.player.y }),
+      { tutorial: this.isTutorial },
+      {
+        signalNuke: () => this.activateSignalNuke(),
+        timeBonus: () => this.activateTimeBonus(),
+        shieldGrant: () => this.player.addShieldCharge(),
+      },
+    );
+    this.powerupSystem.start();
+
     this.runLoot.scrap = 0;
     this.runLoot.cores = 0;
     this.combo = 1.0;
@@ -177,12 +180,6 @@ export class RaidScene extends Phaser.Scene {
     this.extractTimer = 0;
     this.elapsed = 0;
     this.captionDoneIdx = -1;
-    this.tutorialPowerups = [];
-    this.droneSwarmExpiresAt = -1;
-    this.magnetBurstExpiresAt = -1;
-    this.droneSwarmTriggered = false;
-    this.magnetBurstTriggered = false;
-    this.droneSwarmDrones = [];
 
     if (this.isTutorial) {
       this.player.applyHpMult(Balance.tutorial.playerHpMult);
@@ -213,54 +210,45 @@ export class RaidScene extends Phaser.Scene {
 
     const frame = this.inputSystem.getInput();
     this.player.update(dt, frame);
+    this.player.syncShieldAura();
     this.waveDirector.update(dt);
     this.extraction.update(dt, this.player.x, this.player.y);
     this.greed.update(dt);
+    this.powerupSystem.update(dt);
 
     if (this.isTutorial) this.tickTutorial(dt);
 
+    // Push current power-up state into the weapon. Cheap to do every frame -
+    // the setters are just field writes.
+    this.weapons.setFireRateMult(this.powerupSystem.getFireRateMult());
+    this.weapons.setTargetsPerShot(this.powerupSystem.getTargetsPerShot());
+
+    const frozen = this.powerupSystem.isFreezeActive();
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
       if (!e.active) continue;
-      const r = e.tick(dt, this.player.x, this.player.y);
+      // Visual cue while Freeze Pulse is up; restored to white on thaw.
+      if (frozen) e.setTint(Balance.powerups.freezeTint);
+      else e.clearTint();
+      const r = e.tick(dt, this.player.x, this.player.y, frozen);
       if (r.fired) this.spawnEnemyBullet(r.fired.fromX, r.fired.fromY, r.fired.dirX, r.fired.dirY);
     }
 
-    const hit = this.weapons.update(dt);
-    if (hit) {
-      const targetX = hit.target.x;
-      const targetY = hit.target.y;
-      const killed = hit.target.hit(hit.damage);
-      this.showPopup(targetX, targetY - 16, `-${Math.round(hit.damage)}`, '#ffffff');
-      if (killed) {
-        const dead = hit.target;
-        this.particles.enemyDeath(dead.kind, dead.x, dead.y);
-        this.spawnDrops(dead);
-        dead.kill();
-        this.onEnemyKilled();
-      }
-    }
+    const hits = this.weapons.update(dt);
+    for (const hit of hits) this.processHit(hit.target, hit.damage, this.player.x, this.player.y);
 
-    // Magnet Burst placeholder: temporarily multiplies the magnet radius.
-    let magnetRadius = UpgradeEffects.magnetRadius();
-    if (this.magnetBurstExpiresAt > 0 && this.elapsed < this.magnetBurstExpiresAt) {
-      magnetRadius *= Balance.tutorial.magnetBurstRadiusMult;
-    } else if (this.magnetBurstExpiresAt > 0 && this.elapsed >= this.magnetBurstExpiresAt) {
-      this.magnetBurstExpiresAt = -1;
-    }
+    // Magnet radius: base × upgrade × Magnet Burst (when active).
+    const magnetRadius = UpgradeEffects.magnetRadius() * this.powerupSystem.getMagnetMult();
     for (const child of this.pickups.getChildren()) {
       const p = child as Pickup;
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
-    // Drone Swarm placeholder: visual orbiting drones for the effect window.
-    if (this.droneSwarmDrones.length > 0) {
-      for (const d of this.droneSwarmDrones) d.update(dt, this.player.x, this.player.y);
-      if (this.droneSwarmExpiresAt > 0 && this.elapsed >= this.droneSwarmExpiresAt) {
-        for (const d of this.droneSwarmDrones) d.destroy();
-        this.droneSwarmDrones = [];
-        this.droneSwarmExpiresAt = -1;
-      }
+    // Powerups magnetize on the same radius but with a separate, more
+    // forgiving pull profile (Powerup.updateMagnet's internal speeds).
+    for (const child of this.powerups.getChildren()) {
+      const p = child as Powerup;
+      if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
     this.tickBullets(dt);
@@ -280,10 +268,7 @@ export class RaidScene extends Phaser.Scene {
     this.particles.destroy();
     this.extraction.destroy();
     this.greed.stop();
-    for (const d of this.droneSwarmDrones) d.destroy();
-    this.droneSwarmDrones = [];
-    for (const tp of this.tutorialPowerups) tp.body.destroy();
-    this.tutorialPowerups = [];
+    this.powerupSystem.stop();
     if (this.tutorialBanner) {
       this.tutorialBanner.destroy();
       this.tutorialBanner = null;
@@ -603,12 +588,10 @@ export class RaidScene extends Phaser.Scene {
 
   // ---- tutorial-only helpers ----
 
-  // Tutorial loop: schedule captions, scripted power-up spawns, and detect
-  // overlap with the placeholder power-ups (since they're Graphics objects,
-  // not physics sprites, the overlap check is manual).
-  private tickTutorial(dt: number): void {
-    void dt;
-    // Captions
+  // Tutorial loop just drives caption timings now - power-up spawns and
+  // effects are handled by PowerupSystem in tutorial mode (scripted at
+  // §5.4 timestamps).
+  private tickTutorial(_dt: number): void {
     const timings = Balance.tutorial.captionTimings;
     for (let i = this.captionDoneIdx + 1; i < timings.length; i++) {
       if (this.elapsed >= timings[i].t) {
@@ -616,28 +599,6 @@ export class RaidScene extends Phaser.Scene {
         this.showTutorialCaption(timings[i].key);
       } else break;
     }
-
-    // Scripted power-up spawns. Each spawns once when its timestamp is crossed.
-    if (!this.droneSwarmTriggered && this.elapsed >= Balance.tutorial.droneSwarmAtSec) {
-      this.droneSwarmTriggered = true;
-      this.spawnTutorialPowerup('droneSwarm');
-    }
-    if (!this.magnetBurstTriggered && this.elapsed >= Balance.tutorial.magnetBurstAtSec) {
-      this.magnetBurstTriggered = true;
-      this.spawnTutorialPowerup('magnetBurst');
-    }
-
-    // Manual overlap + pulse for each active tutorial power-up.
-    for (const tp of this.tutorialPowerups) {
-      if (tp.collected) continue;
-      tp.pulse += 0.12;
-      this.drawTutorialPowerup(tp);
-      const dx = this.player.x - tp.x;
-      const dy = this.player.y - tp.y;
-      if (Math.hypot(dx, dy) <= 28) this.collectTutorialPowerup(tp);
-    }
-    // Drop collected entries.
-    this.tutorialPowerups = this.tutorialPowerups.filter(tp => !tp.collected);
   }
 
   private showTutorialCaption(key: TutorialCaptionKey): void {
@@ -699,96 +660,131 @@ export class RaidScene extends Phaser.Scene {
     }
   }
 
-  // Placeholder power-up - field-spawned pentagon ring that grants the named
-  // effect on contact. M12 replaces this with the real PowerupSystem.
-  // TODO(M12): retire spawn/draw/collect; route through PowerupSystem instead.
-  private spawnTutorialPowerup(kind: 'droneSwarm' | 'magnetBurst'): void {
-    const angle = Math.random() * Math.PI * 2;
-    const r = Balance.tutorial.powerupSpawnRadius;
-    const x = Phaser.Math.Clamp(
-      this.player.x + Math.cos(angle) * r,
-      Balance.player.worldBounds.minX + 60,
-      Balance.player.worldBounds.maxX - 60,
-    );
-    const y = Phaser.Math.Clamp(
-      this.player.y + Math.sin(angle) * r,
-      Balance.player.worldBounds.minY + 60,
-      Balance.player.worldBounds.maxY - 60,
-    );
-    const body = this.add.graphics();
-    body.setDepth(40);
-    const tp: TutorialPowerup = { kind, x, y, body, pulse: 0, collected: false };
-    this.tutorialPowerups.push(tp);
-    this.drawTutorialPowerup(tp);
-  }
+  // ---- power-up overlap + chain + instant handlers ----
 
-  private drawTutorialPowerup(tp: TutorialPowerup): void {
-    const color = tp.kind === 'droneSwarm' ? Balance.colors.player : Balance.colors.reward;
-    const r = 18 + Math.sin(tp.pulse) * 3;
-    tp.body.clear();
-    tp.body.lineStyle(3, color, 0.95);
-    tp.body.beginPath();
-    for (let i = 0; i < 5; i++) {
-      const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
-      const px = tp.x + Math.cos(a) * r;
-      const py = tp.y + Math.sin(a) * r;
-      if (i === 0) tp.body.moveTo(px, py);
-      else tp.body.lineTo(px, py);
+  private onPowerupOverlap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_player, powerupObj) => {
+    const pup = powerupObj as Powerup;
+    if (!pup.active) return;
+    const kind = pup.kind;
+    const def = PowerupDefs[kind];
+    pup.kill();
+    this.powerupSystem.activate(kind);
+    // §13: every power-up surfaces its label as a popup so the player learns
+    // the names without a tooltip.
+    this.showPopup(this.player.x, this.player.y - 24, def.label, '#ffd75a');
+    bus.emit(Events.POWERUP_COLLECTED, kind);
+  };
+
+  // processHit centralizes the per-hit damage path: render -damage popup, run
+  // hit() / kill paths, then if Drone Swarm is up, chain to N more enemies
+  // within the chain radius.
+  private processHit(target: Enemy, damage: number, sourceX: number, sourceY: number): void {
+    if (!target.active) return;
+    const tx = target.x;
+    const ty = target.y;
+    const killed = target.hit(damage);
+    this.showPopup(tx, ty - 16, `-${Math.round(damage)}`, '#ffffff');
+    if (killed) {
+      this.particles.enemyDeath(target.kind, tx, ty);
+      this.spawnDrops(target);
+      target.kill();
+      this.onEnemyKilled();
     }
-    tp.body.closePath();
-    tp.body.strokePath();
-    tp.body.lineStyle(1, color, 0.4);
-    tp.body.strokeCircle(tp.x, tp.y, r + 6);
-  }
 
-  private collectTutorialPowerup(tp: TutorialPowerup): void {
-    tp.collected = true;
-    tp.body.destroy();
-    const label = tp.kind === 'droneSwarm' ? Strings.powerupDroneSwarm : Strings.powerupMagnetBurst;
-    this.showPopup(tp.x, tp.y - 16, label, '#ffd75a');
-    if (tp.kind === 'droneSwarm') this.activateDroneSwarm();
-    else this.activateMagnetBurst();
-  }
-
-  private activateDroneSwarm(): void {
-    // Already running? Refresh the timer instead of stacking drones.
-    if (this.droneSwarmDrones.length > 0) {
-      this.droneSwarmExpiresAt = this.elapsed + Balance.tutorial.droneSwarmEffectSec;
-      return;
+    // Chain (Drone Swarm). Each chain hop deals the same damage; chain count
+    // is capped per shot. We chain from the last hit location, not the player,
+    // so the tracer visually walks across the field.
+    const chains = this.powerupSystem.getChainCount();
+    if (chains <= 0) return;
+    let fromX = tx;
+    let fromY = ty;
+    const visited = new Set<Enemy>([target]);
+    for (let i = 0; i < chains; i++) {
+      const next = this.findChainTarget(fromX, fromY, visited);
+      if (!next) break;
+      visited.add(next);
+      this.weapons.drawTracer(fromX, fromY, next.x, next.y, PowerupDefs.droneSwarm.color);
+      const nextX = next.x;
+      const nextY = next.y;
+      const nextKilled = next.hit(damage);
+      this.showPopup(nextX, nextY - 16, `-${Math.round(damage)}`, '#a76cff');
+      if (nextKilled) {
+        this.particles.enemyDeath(next.kind, nextX, nextY);
+        this.spawnDrops(next);
+        next.kill();
+        this.onEnemyKilled();
+      }
+      fromX = nextX;
+      fromY = nextY;
     }
-    const count = Balance.tutorial.droneSwarmDroneCount;
-    for (let i = 0; i < count; i++) {
-      const baseAngle = (i / count) * Math.PI * 2;
-      this.droneSwarmDrones.push(
-        new Drone(this, {
-          orbitRadius: Balance.tutorial.droneSwarmOrbitRadius,
-          orbitSpeed: Balance.tutorial.droneSwarmOrbitSpeed,
-          baseAngle,
-          pickupRadius: 130,
-          withTrail: true,
-        }),
-      );
-    }
-    this.droneSwarmExpiresAt = this.elapsed + Balance.tutorial.droneSwarmEffectSec;
+    // sourceX/sourceY currently unused - reserved if chain logic later wants to
+    // gate the FIRST chain on a max-distance-from-player check.
+    void sourceX;
+    void sourceY;
   }
 
-  private activateMagnetBurst(): void {
-    this.magnetBurstExpiresAt = this.elapsed + Balance.tutorial.magnetBurstEffectSec;
+  private findChainTarget(fromX: number, fromY: number, visited: Set<Enemy>): Enemy | null {
+    const radius2 = Balance.powerups.droneSwarmChainRadius * Balance.powerups.droneSwarmChainRadius;
+    let best: Enemy | null = null;
+    let bestD2 = radius2;
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active || visited.has(e)) continue;
+      const dx = e.x - fromX;
+      const dy = e.y - fromY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  // Signal Nuke (§13 "kills all on-screen enemies"). We use a generous radius
+  // around the player rather than reading the camera so a player at the edge
+  // of the arena still clears the wave they can see.
+  private activateSignalNuke(): void {
+    const r2 = Balance.powerups.signalNukeRadius * Balance.powerups.signalNukeRadius;
+    this.cameras.main.shake(180, 0.012);
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active) continue;
+      const dx = e.x - this.player.x;
+      const dy = e.y - this.player.y;
+      if (dx * dx + dy * dy > r2) continue;
+      this.particles.enemyDeath(e.kind, e.x, e.y);
+      this.spawnDrops(e);
+      e.kill();
+      this.onEnemyKilled();
+    }
+    // Also clear in-flight enemy bullets so the nuke feels totally clean.
+    for (const child of this.bullets.getChildren()) {
+      const b = child as Bullet;
+      if (b.active) b.kill();
+    }
+  }
+
+  // +15 Seconds: just extends the raid timer. The HUD timer rounds up so the
+  // bump is visible immediately.
+  private activateTimeBonus(): void {
+    this.timeRemaining += Balance.powerups.timeBonusSeconds;
   }
 
   // ---- waypoint target (consumed by HUDScene) ----
 
   // Priority order: an open extraction pad always wins. Before extraction
-  // opens, the tutorial directs the off-screen arrow at the live placeholder
-  // power-up (if any). Non-tutorial raids return null until extraction opens.
+  // opens, the tutorial directs the off-screen arrow at the live power-up
+  // (if any). Non-tutorial raids return null until extraction opens.
   getWaypointTarget(): WaypointTarget | null {
     if (this.extraction.isOpen()) {
       const pos = this.extraction.getPadPosition();
       return { x: pos.x, y: pos.y, kind: 'extract' };
     }
     if (this.isTutorial) {
-      for (const tp of this.tutorialPowerups) {
-        if (!tp.collected) return { x: tp.x, y: tp.y, kind: 'powerup' };
+      for (const child of this.powerups.getChildren()) {
+        const p = child as Powerup;
+        if (p.active) return { x: p.x, y: p.y, kind: 'powerup' };
       }
     }
     return null;
@@ -796,6 +792,17 @@ export class RaidScene extends Phaser.Scene {
 
   isTutorialRaid(): boolean {
     return this.isTutorial;
+  }
+
+  // Read by HUDScene to render the active-power-up strip (timer-bar pips).
+  getActivePowerups(): ReturnType<PowerupSystem['getActiveEffectsView']> {
+    return this.powerupSystem.getActiveEffectsView();
+  }
+
+  // Shield Bubble (§13): HUD renders a small pip when the player holds at
+  // least one charge. The charge isn't timed - it lives on the Player.
+  getShieldCharges(): number {
+    return this.player.shieldCharges;
   }
 
   private spawnRadialFlash(): void {

@@ -40,6 +40,19 @@ const HP_BAR_W = 220;
 const HP_BAR_H = 14;
 const HP_LOW_RATIO = 0.30;
 
+// Active-power-up pip strip lives under the HP bar.
+const PIP_STRIP_X = 12;
+const PIP_STRIP_Y = 60;
+const PIP_W = 92;
+const PIP_H = 26;
+const PIP_GAP = 6;
+
+interface PowerupPip {
+  bg: Phaser.GameObjects.Rectangle;
+  fill: Phaser.GameObjects.Rectangle;
+  text: Phaser.GameObjects.Text;
+}
+
 export class HUDScene extends Phaser.Scene {
   private fpsText!: Phaser.GameObjects.Text;
   private hpBarBg!: Phaser.GameObjects.Rectangle;
@@ -55,6 +68,9 @@ export class HUDScene extends Phaser.Scene {
   private spmText!: Phaser.GameObjects.Text;
   private deployText!: Phaser.GameObjects.Text;
   private lastFpsUpdate = 0;
+  // Reusable pip slots (allocated once, shown/hidden per frame).
+  private powerupPips: PowerupPip[] = [];
+  private shieldPip!: PowerupPip;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -195,6 +211,40 @@ export class HUDScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2000)
       .setVisible(false);
+
+    // Pool of pip slots for timed power-ups. We allocate up to the same cap
+    // as PowerupSystem.active can hold (one per distinct kind = 4 timed
+    // entries today). Anything beyond that just stops rendering.
+    for (let i = 0; i < 4; i++) this.powerupPips.push(this.makePip(i));
+    this.shieldPip = this.makePip(0);
+  }
+
+  private makePip(index: number): PowerupPip {
+    const x = PIP_STRIP_X + index * (PIP_W + PIP_GAP);
+    const bg = this.add
+      .rectangle(x, PIP_STRIP_Y, PIP_W, PIP_H, 0x0a1014, 0.9)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.55)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+    const fill = this.add
+      .rectangle(x + 1, PIP_STRIP_Y + PIP_H - 4, PIP_W - 2, 3, 0xffffff, 1)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(2001)
+      .setVisible(false);
+    const text = this.add
+      .text(x + PIP_W / 2, PIP_STRIP_Y + (PIP_H - 4) / 2, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2002)
+      .setVisible(false);
+    return { bg, fill, text };
   }
 
   override update(time: number): void {
@@ -267,6 +317,58 @@ export class HUDScene extends Phaser.Scene {
     } else {
       this.waypoint.setVisible(false);
     }
+
+    this.renderPowerupStrip(raid);
+  }
+
+  private renderPowerupStrip(raid: RaidScene): void {
+    const active = raid.getActivePowerups();
+    const shieldCharges = raid.getShieldCharges();
+
+    // Timed pips
+    for (let i = 0; i < this.powerupPips.length; i++) {
+      const pip = this.powerupPips[i];
+      const eff = active[i];
+      if (!eff) {
+        pip.bg.setVisible(false);
+        pip.fill.setVisible(false);
+        pip.text.setVisible(false);
+        continue;
+      }
+      pip.bg.setVisible(true).setStrokeStyle(1, eff.color, 0.9);
+      pip.fill.setVisible(true).setFillStyle(eff.color, 1);
+      const ratio = Math.max(0, Math.min(1, eff.remaining / Math.max(0.001, eff.total)));
+      pip.fill.setSize(Math.max(0, (PIP_W - 2) * ratio), 3);
+      pip.text.setVisible(true).setText(`${eff.iconText}  ${eff.remaining.toFixed(1)}s`);
+    }
+
+    // Shield pip - drawn to the right of any active timed effects.
+    if (shieldCharges > 0) {
+      const slotIdx = active.length;
+      const sx = PIP_STRIP_X + slotIdx * (PIP_W + PIP_GAP);
+      this.shieldPip.bg.setPosition(sx, PIP_STRIP_Y).setVisible(true).setStrokeStyle(1, 0xffffff, 0.9);
+      this.shieldPip.fill.setPosition(sx + 1, PIP_STRIP_Y + PIP_H - 4).setVisible(true).setFillStyle(0xffffff, 1);
+      this.shieldPip.fill.setSize(PIP_W - 2, 3);
+      this.shieldPip.text
+        .setPosition(sx + PIP_W / 2, PIP_STRIP_Y + (PIP_H - 4) / 2)
+        .setVisible(true)
+        .setText(`SHLD x${shieldCharges}`);
+    } else {
+      this.shieldPip.bg.setVisible(false);
+      this.shieldPip.fill.setVisible(false);
+      this.shieldPip.text.setVisible(false);
+    }
+  }
+
+  private hideAllPips(): void {
+    for (const pip of this.powerupPips) {
+      pip.bg.setVisible(false);
+      pip.fill.setVisible(false);
+      pip.text.setVisible(false);
+    }
+    this.shieldPip.bg.setVisible(false);
+    this.shieldPip.fill.setVisible(false);
+    this.shieldPip.text.setVisible(false);
   }
 
   private renderFactory(factory: FactoryScene): void {
@@ -280,6 +382,7 @@ export class HUDScene extends Phaser.Scene {
     this.hpText.setText('');
     this.hpText.setVisible(false);
     this.waypoint.setVisible(false);
+    this.hideAllPips();
 
     const wallet = Economy.getWallet();
     this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
@@ -313,6 +416,7 @@ export class HUDScene extends Phaser.Scene {
     this.waypoint.setVisible(false);
     if (this.spmText) this.spmText.setVisible(false);
     if (this.deployText) this.deployText.setVisible(false);
+    if (this.shieldPip) this.hideAllPips();
   }
 
   private drawWaypoint(raid: RaidScene, padX: number, padY: number, color: number = Balance.colors.extraction): void {

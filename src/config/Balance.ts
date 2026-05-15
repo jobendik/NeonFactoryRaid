@@ -44,15 +44,11 @@ export const Balance = {
       { t: 12.0, key: 'powerup' as const },
       { t: 18.0, key: 'extract' as const },
     ] as const,
+    // Scripted §5.4 power-up spawn times - consumed by PowerupSystem when
+    // running in tutorial mode. Effect durations / radii live in
+    // Balance.powerups (those are real-power-up rules, shared with non-tutorial raids).
     droneSwarmAtSec: 10.0,
-    droneSwarmEffectSec: 12.0,
-    droneSwarmDroneCount: 3,
-    droneSwarmOrbitRadius: 70,
-    droneSwarmOrbitSpeed: 3.2,
     magnetBurstAtSec: 25.0,
-    magnetBurstEffectSec: 6.0,
-    magnetBurstRadiusMult: 3.0,
-    powerupSpawnRadius: 220,
   },
   player: {
     baseSpeed: 260,
@@ -127,6 +123,22 @@ export const Balance = {
     spawnIntervalMax: 14,
     maxOnField: 10,
     spawnRadius: 280,
+    // Magnet Burst: temporary magnet-radius multiplier.
+    magnetBurstRadiusMult: 3.0,
+    // Drone Swarm = "chain shots to extra enemies" per §13. After damaging
+    // the primary target, the shot also damages up to N additional nearest
+    // enemies within droneSwarmChainRadius.
+    droneSwarmChainCount: 2,
+    droneSwarmChainRadius: 220,
+    // Signal Nuke radius around the player. Per blueprint copy "kills all
+    // on-screen enemies"; we use a generous radius rather than literally
+    // reading the camera so it still feels right at edge cases.
+    signalNukeRadius: 900,
+    timeBonusSeconds: 15,
+    // The power-up's own pickup radius - larger than scrap so it feels easy.
+    pickupCollectRadius: 26,
+    // Freeze Pulse - flash to indicate freeze status on each enemy.
+    freezeTint: 0xb3e0ff,
   },
   performance: {
     maxParticles: 360,

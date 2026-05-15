@@ -32,8 +32,6 @@ export const Strings = {
   ftueExtract: 'EXTRACT',
   ftueTutorialBanner: 'TUTORIAL',
   ftueDeployPrompt: 'DEPLOY',
-  powerupDroneSwarm: 'DRONE SWARM',
-  powerupMagnetBurst: 'MAGNET BURST',
   // Tutorial summary single-button label per §5.2 ("Single button: UPGRADE").
   summaryUpgrade: 'UPGRADE',
 } as const;

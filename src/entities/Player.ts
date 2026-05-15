@@ -26,6 +26,10 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // FTUE safety net per §5.1: tutorial raid clamps HP so the player can't die.
   // Default 0 means takeDamage behaves normally; tutorial sets it to 1.
   private hpFloor = 0;
+  // Shield Bubble (§13). Each pickup grants +1 charge. takeDamage decrements
+  // first - if a charge absorbed the hit, the player takes no HP damage.
+  shieldCharges = 0;
+  private shieldAura: Phaser.GameObjects.Graphics | null = null;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Player.ensureTexture(scene);
@@ -152,9 +156,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.hp = this.maxHp;
   }
 
-  // Returns the amount actually applied; 0 if invulnerable or already at 0 HP.
+  // Returns the amount actually applied; 0 if invulnerable, already at 0 HP,
+  // or fully absorbed by a Shield Bubble charge.
   takeDamage(amount: number): number {
     if (this.isInvulnerable() || this.hp <= 0) return 0;
+    if (this.shieldCharges > 0) {
+      this.shieldCharges -= 1;
+      this.hitInvulnTimer = Balance.player.invulnAfterHit;
+      this.flashShieldBreak();
+      this.refreshShieldAura();
+      bus.emit(Events.PLAYER_DAMAGED, 0, this.hp);
+      return 0;
+    }
     const room = this.hp - this.hpFloor;
     if (room <= 0) return 0;
     const applied = Math.min(room, amount);
@@ -168,5 +181,48 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     bus.emit(Events.PLAYER_DAMAGED, applied, this.hp);
     if (this.hp <= 0) bus.emit(Events.PLAYER_DIED);
     return applied;
+  }
+
+  // Adds a shield charge from a Shield Bubble pickup. Multiple charges stack.
+  addShieldCharge(): void {
+    this.shieldCharges += 1;
+    this.refreshShieldAura();
+  }
+
+  // Re-draws the white ring that visualizes an active shield. The aura sits
+  // on the scene rather than as a child so it survives the parent's tint changes.
+  private refreshShieldAura(): void {
+    if (this.shieldCharges <= 0) {
+      this.shieldAura?.destroy();
+      this.shieldAura = null;
+      return;
+    }
+    if (!this.shieldAura) {
+      this.shieldAura = this.scene.add.graphics().setDepth(this.depth + 1);
+    }
+    const g = this.shieldAura;
+    g.clear();
+    g.lineStyle(2, 0xffffff, 0.85);
+    g.strokeCircle(0, 0, 22);
+  }
+
+  // Per-frame: keep the shield aura attached to the player.
+  syncShieldAura(): void {
+    if (this.shieldAura) this.shieldAura.setPosition(this.x, this.y);
+  }
+
+  private flashShieldBreak(): void {
+    const g = this.scene.add.graphics();
+    g.lineStyle(3, 0xffffff, 1);
+    g.strokeCircle(0, 0, 26);
+    g.setPosition(this.x, this.y).setDepth(this.depth + 2);
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      scale: 1.8,
+      duration: 280,
+      ease: 'Cubic.easeOut',
+      onComplete: () => g.destroy(),
+    });
   }
 }
