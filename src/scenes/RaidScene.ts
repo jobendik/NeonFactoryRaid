@@ -10,6 +10,7 @@ import { ParticleEffects } from '../systems/ParticleEffects';
 import { ExtractionSystem } from '../systems/ExtractionSystem';
 import { GreedSystem } from '../systems/GreedSystem';
 import { Economy } from '../systems/EconomySystem';
+import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
@@ -105,6 +106,7 @@ export class RaidScene extends Phaser.Scene {
       () => ({ x: this.player.x, y: this.player.y }),
       () => this.enemies.getChildren(),
     );
+    this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
 
     this.extraction = new ExtractionSystem(
       this,
@@ -171,7 +173,7 @@ export class RaidScene extends Phaser.Scene {
       }
     }
 
-    const magnetRadius = Balance.magnet.baseRadius;
+    const magnetRadius = UpgradeEffects.magnetRadius();
     for (const child of this.pickups.getChildren()) {
       const p = child as Pickup;
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
@@ -307,7 +309,8 @@ export class RaidScene extends Phaser.Scene {
       if (!p) break;
       p.spawn(ex, ey, 'scrap', valuePerDrop);
     }
-    if (Math.random() < def.coreChance) {
+    const coreChance = UpgradeEffects.coreDropChance(def.coreChance);
+    if (Math.random() < coreChance) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
       if (p) p.spawn(ex, ey, 'core', valuePerDrop);
     }
