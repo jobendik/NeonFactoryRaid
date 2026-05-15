@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { SDKBridge } from '../platform/SDKBridge';
 import { saveSystem } from '../platform/SaveSystem';
+import { Strings } from '../config/Strings';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -13,9 +14,11 @@ export class BootScene extends Phaser.Scene {
     SDKBridge.loadingStart();
     await SDKBridge.init();
     await saveSystem.load();
+    SDKBridge.loadingStop();
 
-    console.log('Boot OK');
+    console.log(Strings.bootOk);
 
-    // Subsequent scenes (PreloadScene, FactoryScene, RaidScene, etc.) are added in later milestones.
+    this.scene.start('RaidScene');
+    this.scene.launch('HUDScene');
   }
 }

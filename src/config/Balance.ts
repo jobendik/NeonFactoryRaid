@@ -110,6 +110,47 @@ export const Balance = {
     height: 720,
     backgroundColor: '#000000',
   },
+  ui: {
+    joystickMaxRadius: 90,
+    joystickDeadZone: 0.15,
+    dashButtonRadius: 60,
+    dashButtonOffset: 110,
+    cameraFollowLerp: 0.12,
+    dashShakeDuration: 140,
+    dashShakeIntensity: 0.006,
+    hitShakeDuration: 100,
+    hitShakeIntensity: 0.004,
+    tracerFadeMs: 90,
+    fpsUpdateMs: 250,
+    gridStep: 80,
+    gridAlpha: 0.08,
+    boundsAlpha: 0.22,
+    popupRiseDist: 36,
+    popupDurationMs: 700,
+  },
+  colors: {
+    player: 0x22f6ff,
+    playerOutline: 0xffffff,
+    playerDashAccent: 0xffd75a,
+    scrap: 0x22f6ff,
+    core: 0xffd75a,
+    enemyGrunt: 0xff416b,
+    enemySwarmer: 0xff7aa6,
+    enemyTank: 0xff9c3d,
+    enemyShooter: 0xa76cff,
+    enemyTelegraph: 0xa76cff,
+    extraction: 0x72ff9f,
+    bulletTracer: 0x22f6ff,
+    background: 0x22f6ff,
+    danger: 0xff416b,
+    reward: 0xffd75a,
+  },
+  fireStub: {
+    // M1 ONLY: auto-fire stub direction so tracers are visible.
+    // Replaced by auto-aim in Milestone 3.
+    targetOffsetX: 320,
+    targetOffsetY: 0,
+  },
 } as const;
 
 export type BalanceConfig = typeof Balance;

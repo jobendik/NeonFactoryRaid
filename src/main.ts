@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
+import { RaidScene } from './scenes/RaidScene';
+import { HUDScene } from './scenes/HUDScene';
 import { Balance } from './config/Balance';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -24,7 +26,7 @@ const config: Phaser.Types.Core.GameConfig = {
     antialias: true,
     powerPreference: 'high-performance',
   },
-  scene: [BootScene],
+  scene: [BootScene, RaidScene, HUDScene],
 };
 
 new Phaser.Game(config);

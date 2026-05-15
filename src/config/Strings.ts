@@ -4,6 +4,7 @@
 export const Strings = {
   bootOk: 'Boot OK',
   gameTitle: 'NEON FACTORY RAID',
+  fps: 'FPS',
 } as const;
 
 export type StringKey = keyof typeof Strings;
