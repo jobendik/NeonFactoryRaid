@@ -52,4 +52,18 @@ export const Economy = {
     const save = saveSystem.get();
     return { scrap: save.scrap, cores: save.cores };
   },
+
+  // Offline production per §8.6: SPM × minutes-offline, capped at
+  // Balance.economy.offlineCapHours. Infested machines don't contribute
+  // (no infestation in the system yet, so the ratio is 0 in M10).
+  computeOfflineScrap(nowMs: number = Date.now()): number {
+    const save = saveSystem.get();
+    const last = save.lastSave || nowMs;
+    if (last >= nowMs) return 0;
+    const elapsedSec = (nowMs - last) / 1000;
+    const cappedSec = Math.min(elapsedSec, Balance.economy.offlineCapHours * 3600);
+    if (cappedSec <= 0) return 0;
+    const spm = Economy.computeSpm();
+    return Math.floor(spm * (cappedSec / 60));
+  },
 };

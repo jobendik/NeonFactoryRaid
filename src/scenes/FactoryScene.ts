@@ -88,6 +88,8 @@ export class FactoryScene extends Phaser.Scene {
     this.deployHold = 0;
 
     bus.on(Events.UPGRADE_PURCHASED, this.onUpgradePurchased);
+
+    this.showOfflineToast();
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -136,6 +138,9 @@ export class FactoryScene extends Phaser.Scene {
 
   shutdown(): void {
     bus.off(Events.UPGRADE_PURCHASED, this.onUpgradePurchased);
+    // Bracket the scene transition with a save so deploy-and-die can't lose
+    // upgrades the player just bought.
+    void saveSystem.persist();
     this.inputSystem.destroy();
     for (const gen of this.generators) gen.destroy();
     this.generators = [];
@@ -246,6 +251,41 @@ export class FactoryScene extends Phaser.Scene {
     this.spawnGenerators();
     this.spawnMilestoneVisuals();
     this.spawnDrones();
+  }
+
+  private showOfflineToast(): void {
+    const amount = saveSystem.consumePendingOfflineScrap();
+    if (amount <= 0) return;
+    const toast = this.add
+      .text(this.scale.width / 2, 60, `+${amount} ${Strings.summaryScrap} from offline factory`, {
+        fontFamily: 'monospace',
+        fontSize: '18px',
+        color: '#22f6ff',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#0a1014',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2100)
+      .setAlpha(0);
+
+    this.tweens.add({
+      targets: toast,
+      alpha: 1,
+      y: 80,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(4200, () => {
+      this.tweens.add({
+        targets: toast,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => toast.destroy(),
+      });
+    });
   }
 
   private spawnMilestoneVisuals(): void {

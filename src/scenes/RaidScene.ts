@@ -15,6 +15,7 @@ import { Balance } from '../config/Balance';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
 import { playRisingChord } from '../platform/Audio';
+import { saveSystem } from '../platform/SaveSystem';
 import type { RaidEndState, RaidEndPayload } from '../core/types';
 
 type RaidPhase = 'active' | 'extracting' | 'ended';
@@ -450,6 +451,10 @@ export class RaidScene extends Phaser.Scene {
     }
 
     Economy.bankLoot(scrap, cores);
+    // Persist immediately on raid-end so the player can't lose loot to a tab
+    // close on the summary screen. The 10s autosave and the RAID_ENDED handler
+    // both still fire later; this is the belt-and-suspenders save.
+    void saveSystem.persist();
 
     const payload: RaidEndPayload = {
       endState: state,
