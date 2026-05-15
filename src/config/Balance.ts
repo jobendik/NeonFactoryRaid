@@ -255,6 +255,36 @@ export const Balance = {
     waypointEdgeMargin: 50,
     waypointSize: 22,
   },
+  // §12 in-run drafting. Card numerics are sourced from the blueprint's card
+  // list; tweaking here is a one-file pass for balance.
+  cards: {
+    // Time-slow during draft would be 0.1 per §7.6. We pause the scene instead
+    // (see DraftScene comments) so this is unused, but kept for documentation.
+    timeScale: 0.1,
+    autoPickSec: 8,
+    rarityWeights: {
+      // Index matches Balance.raid.draftTimes order: [0]=20s draft, [1]=45s draft.
+      first:  { common: 0.70, rare: 0.25, epic: 0.05 },
+      second: { common: 0.40, rare: 0.45, epic: 0.15 },
+    },
+    chainBonusRadius: 200,        // §12 "Chain Lightning: shots bounce within 200px"
+    magnetStormDurSec: 8,         // per pick
+    orbitalShieldRegenSec: 12,    // per blueprint
+    phoenixReviveHpRatio: 0.5,    // 50% HP
+    greedSurgeMult: 1.5,
+    sharperShotsAdd: 0.15,
+    quickFeetAdd: 0.10,
+    wideMagnetAdd: 0.20,
+    hardyHpAdd: 20,
+    burstFireAdd: 0.10,
+    luckyAdd: 0.05,
+    dashMasterMult: 0.70,         // ×0.7 cooldown
+    healOnPickupAdd: 1,
+    critChanceAdd: 0.15,
+    critMult: 3.0,
+    vampiricChanceAdd: 0.10,
+    vampiricHeal: 5,
+  },
   factory: {
     backgroundColor: '#04080c',
     generatorPositions: [

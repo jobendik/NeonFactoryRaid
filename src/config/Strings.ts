@@ -34,6 +34,69 @@ export const Strings = {
   ftueDeployPrompt: 'DEPLOY',
   // Tutorial summary single-button label per §5.2 ("Single button: UPGRADE").
   summaryUpgrade: 'UPGRADE',
+
+  // M15 — in-run drafting modal.
+  draftTitle: 'CHOOSE SIGNAL MOD',
+  draftRarityCommon: 'COMMON',
+  draftRarityRare: 'RARE',
+  draftRarityEpic: 'EPIC',
+
+  // M15 — card names + one-line effects per §12.2.
+  // Implemented:
+  cardSharperShotsName: 'Sharper Shots',
+  cardSharperShotsEffect: '+15% damage',
+  cardQuickFeetName: 'Quick Feet',
+  cardQuickFeetEffect: '+10% movement speed',
+  cardWideMagnetName: 'Wide Magnet',
+  cardWideMagnetEffect: '+20% pickup range',
+  cardHardyName: 'Hardy',
+  cardHardyEffect: '+20 max HP',
+  cardBurstFireName: 'Burst Fire',
+  cardBurstFireEffect: '+10% fire rate',
+  cardLuckyName: 'Lucky',
+  cardLuckyEffect: '+5% core drop chance',
+  cardPierceName: 'Pierce',
+  cardPierceEffect: 'Shots pierce 1 enemy',
+  cardChainLightningName: 'Chain Lightning',
+  cardChainLightningEffect: 'Shots chain to nearest enemy',
+  cardMagnetStormName: 'Magnet Storm',
+  cardMagnetStormEffect: 'Pickups rush to you for 8s',
+  cardDashMasterName: 'Dash Master',
+  cardDashMasterEffect: '-30% dash cooldown',
+  cardHealOnPickupName: 'Heal on Pickup',
+  cardHealOnPickupEffect: 'Scrap restores 1 HP',
+  cardCritShotName: 'Crit Shot',
+  cardCritShotEffect: '15% chance for 3x damage',
+  cardOrbitalShieldName: 'Orbital Shield',
+  cardOrbitalShieldEffect: 'Shield bubble, regens every 12s',
+  cardSplitShotName: 'Split Shot',
+  cardSplitShotEffect: 'Shots fork into 2',
+  cardDroneMultiplierName: 'Drone Multiplier',
+  cardDroneMultiplierEffect: 'Drone count doubled',
+  cardVampiricName: 'Vampiric',
+  cardVampiricEffect: '10% kills heal 5 HP',
+  cardGreedSurgeName: 'Greed Surge',
+  cardGreedSurgeEffect: '+50% loot multiplier',
+  cardPhoenixName: 'Phoenix',
+  cardPhoenixEffect: 'Revive once at 50% HP',
+
+  // M15 — deferred cards (still listed so the pool count is honest, but
+  // filtered out at draw time). See CardDefs.ts.
+  cardRicochetName: 'Ricochet',
+  cardRicochetEffect: 'Shots bounce off walls',
+  cardSlowFieldName: 'Slow Field',
+  cardSlowFieldEffect: 'Enemies near you slow 30%',
+  cardFrenzyModeName: 'Frenzy Mode',
+  cardFrenzyModeEffect: '-50% fire rate at low HP',
+  cardNovaDashName: 'Nova Dash',
+  cardNovaDashEffect: 'Dash creates damaging ring',
+  cardTimeDilationName: 'Time Dilation',
+  cardTimeDilationEffect: 'Enemies move 15% slower',
+  cardPyrokineticName: 'Pyrokinetic',
+  cardPyrokineticEffect: 'Death blasts harm nearby',
+
+  draftAutoPick: 'Auto-pick in',
+  draftPicked: 'PICKED',
 } as const;
 
 export type StringKey = keyof typeof Strings;

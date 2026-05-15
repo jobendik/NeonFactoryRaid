@@ -20,6 +20,11 @@ import { PowerupDefs } from '../config/PowerupDefs';
 import { bus, Events } from '../core/EventBus';
 import { saveSystem } from '../platform/SaveSystem';
 import { MusicEngine } from '../audio/music';
+import { DraftSystem } from '../systems/DraftSystem';
+import { createDefaultRunMods, type RunMods } from '../systems/RunMods';
+import type { CardDef } from '../config/CardDefs';
+import type { DraftSceneInit } from './DraftScene';
+import { Rng } from '../core/Rng';
 import {
   sfxCore,
   sfxScrap,
@@ -100,6 +105,18 @@ export class RaidScene extends Phaser.Scene {
   private lastTickSecond = -1;
   // Tracks whether we already played extraction-tick this filling window.
   private extractionTickElapsed = 0;
+  // M15 — drafted card mods + the system that picks/tracks them. RunMods
+  // starts at defaults each raid; M16 will seed operator-specific values
+  // before the first draft window opens.
+  private runMods: RunMods = createDefaultRunMods();
+  private draftSystem!: DraftSystem;
+  private draftActive = false;
+  // Magnet Storm card grants a temporary radius boost; this counts down
+  // each frame while > 0. Stacks additively on pick (8s per copy).
+  private magnetStormRemaining = 0;
+  // Per-raid Rng. M19 will switch tutorial/normal/daily-seed seeding modes;
+  // for M15 it's just `Date.now()` so DraftSystem has a non-Math.random source.
+  private rng!: Rng;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => {
@@ -230,12 +247,62 @@ export class RaidScene extends Phaser.Scene {
     this.nearMissAwarded.clear();
     this.buildGreedOverlays();
 
+    // RunMods + drafting. Reset to defaults; the player has no operator
+    // passive seeded yet (M16 hooks here). Then push current mods into
+    // Player + WeaponSystem so the very first frame reads consistent state.
+    this.runMods = createDefaultRunMods();
+    this.magnetStormRemaining = 0;
+    this.rng = new Rng(Date.now());
+    this.draftSystem = new DraftSystem(this.rng);
+    this.player.applyRunMods(this.runMods);
+    this.weapons.applyRunMods(this.runMods);
+    this.draftActive = false;
+
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
+    bus.on(Events.DRAFT_PICKED, this.onDraftPicked);
 
     MusicEngine.startRaid();
     bus.emit(Events.RAID_STARTED);
+  }
+
+  // Bus handler bound once in create() so we can off() it on shutdown without
+  // capturing the wrong `this`.
+  private onDraftPicked = (...args: unknown[]): void => {
+    const card = args[0] as CardDef | undefined;
+    if (!card) return;
+    card.apply(this.runMods);
+    this.player.applyRunMods(this.runMods);
+    this.weapons.applyRunMods(this.runMods);
+    // Magnet Storm grants a temporary high-radius window; pick adds 8s.
+    if (this.runMods.magnetStormDurAdd > 0) {
+      this.magnetStormRemaining += Balance.cards.magnetStormDurSec;
+      // Subtract back so successive picks of the same card type would re-add
+      // (cards can only be picked once per run today, but operator passives
+      // could grant magnet storm later).
+      this.runMods.magnetStormDurAdd -= Balance.cards.magnetStormDurSec;
+    }
+    this.draftActive = false;
+  };
+
+  // Pauses the raid and launches DraftScene with three rng-drawn cards.
+  // Resume happens in onDraftPicked (or in DraftScene's auto-pick path,
+  // which also emits DRAFT_PICKED with a fallback card).
+  private beginDraft(draftIndex: number): void {
+    const cards = this.draftSystem.drawCards(draftIndex);
+    if (cards.length === 0) return; // pool exhausted - skip
+    this.draftSystem.markFired(draftIndex);
+    this.draftSystem.markShown(cards);
+    this.draftActive = true;
+    bus.emit(Events.DRAFT_OFFERED, draftIndex, cards);
+    const init: DraftSceneInit = {
+      cards,
+      draftIndex,
+      raidSceneKey: 'RaidScene',
+    };
+    this.scene.launch('DraftScene', init);
+    this.scene.pause();
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -258,6 +325,17 @@ export class RaidScene extends Phaser.Scene {
 
     this.timeRemaining = Math.max(0, this.timeRemaining - dt);
     this.elapsed += dt;
+    if (this.magnetStormRemaining > 0) this.magnetStormRemaining = Math.max(0, this.magnetStormRemaining - dt);
+
+    // §12 in-run drafting. Tutorial bypassed per spec ("the 45s tutorial is
+    // shorter than the 45s draft anyway, but explicitly gate it").
+    if (!this.isTutorial && !this.draftActive) {
+      const draftIdx = this.draftSystem.shouldOffer(this.elapsed);
+      if (draftIdx !== null) {
+        this.beginDraft(draftIdx);
+        return;
+      }
+    }
 
     const greedStep = this.greed.getStep();
     this.waveDirector.setGreedStep(greedStep);
@@ -290,10 +368,18 @@ export class RaidScene extends Phaser.Scene {
     }
 
     const hits = this.weapons.update(dt);
-    for (const hit of hits) this.processHit(hit.target, hit.damage, this.player.x, this.player.y);
+    for (const hit of hits) this.processHit(hit.target, hit.damage, this.player.x, this.player.y, hit.crit);
 
-    // Magnet radius: base × upgrade × Magnet Burst (when active).
-    const magnetRadius = UpgradeEffects.magnetRadius() * this.powerupSystem.getMagnetMult();
+    // Magnet radius: base × upgrade × Magnet Burst (power-up) × RunMods.magnetMult
+    // × Magnet Storm (drafted, temporary). Magnet Storm uses the same multiplier
+    // as Magnet Burst since the visible behaviour is identical (everything in
+    // the arena rushes you).
+    const magnetStormMult = this.magnetStormRemaining > 0 ? Balance.powerups.magnetBurstRadiusMult : 1;
+    const magnetRadius =
+      UpgradeEffects.magnetRadius() *
+      this.powerupSystem.getMagnetMult() *
+      this.runMods.magnetMult *
+      magnetStormMult;
     for (const child of this.pickups.getChildren()) {
       const p = child as Pickup;
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
@@ -441,6 +527,7 @@ export class RaidScene extends Phaser.Scene {
     bus.off(Events.PLAYER_DIED, this.onPlayerDied);
     bus.off(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.off(Events.EXTRACTION_OPENED, this.onExtractionOpened);
+    bus.off(Events.DRAFT_PICKED, this.onDraftPicked);
     this.waveDirector.stop();
     this.inputSystem.destroy();
     this.particles.destroy();
@@ -522,6 +609,8 @@ export class RaidScene extends Phaser.Scene {
       }
     } else {
       sfxScrap();
+      // Heal on Pickup card: scrap pickups restore N HP (additive across stacks).
+      if (this.runMods.healOnPickup > 0) this.player.heal(this.runMods.healOnPickup);
     }
     p.kill();
     bus.emit(Events.PICKUP_COLLECTED, type, value);
@@ -580,7 +669,11 @@ export class RaidScene extends Phaser.Scene {
       if (!p) break;
       p.spawn(ex, ey, 'scrap', valuePerDrop);
     }
-    const coreChance = UpgradeEffects.coreDropChance(def.coreChance);
+    // Lucky card bonus stacks additively on top of the upgrade-modified base.
+    const coreChance = Math.min(
+      1,
+      UpgradeEffects.coreDropChance(def.coreChance) + this.runMods.coreChanceBonus,
+    );
     if (Math.random() < coreChance) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
       if (p) p.spawn(ex, ey, 'core', valuePerDrop);
@@ -715,7 +808,8 @@ export class RaidScene extends Phaser.Scene {
     let greedMult = 1.0;
     let penaltyApplied = false;
     if (state === 'extracted') {
-      greedMult = this.greed.getMultiplier();
+      // Greed Surge card composes multiplicatively with the greed step.
+      greedMult = this.greed.getMultiplier() * this.runMods.greedSurgeMult;
       scrap = Math.round(scrap * greedMult);
       cores = Math.round(cores * greedMult);
     } else {
@@ -876,14 +970,16 @@ export class RaidScene extends Phaser.Scene {
   // processHit centralizes the per-hit damage path: render -damage popup, run
   // hit() / kill paths, then if Drone Swarm is up, chain to N more enemies
   // within the chain radius. M14 layers in knockback (push enemies away
-  // from the hit source) and hit-stop on Tank / elite kills.
-  private processHit(target: Enemy, damage: number, sourceX: number, sourceY: number): void {
+  // from the hit source) and hit-stop on Tank / elite kills. M15 adds the
+  // crit popup styling and Vampiric chance on kill, and folds Chain Lightning
+  // (drafted) into the chain hop budget.
+  private processHit(target: Enemy, damage: number, sourceX: number, sourceY: number, crit: boolean = false): void {
     if (!target.active) return;
     const tx = target.x;
     const ty = target.y;
     target.applyKnockback(sourceX, sourceY);
     const killed = target.hit(damage);
-    this.showDamagePopup(tx, ty - 16, damage);
+    this.showDamagePopup(tx, ty - 16, damage, crit ? '#ff416b' : '#ffffff', crit);
     if (killed) {
       this.particles.enemyDeath(target.kind, tx, ty);
       this.spawnDrops(target);
@@ -894,14 +990,18 @@ export class RaidScene extends Phaser.Scene {
       sfxEnemyDeath();
       if (wasElite) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopEliteSec);
       else if (wasTank) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopTankSec);
+      // Vampiric (drafted): on kill, chance to heal a small amount.
+      if (this.runMods.vampiricChance > 0 && Math.random() < this.runMods.vampiricChance) {
+        const healed = this.player.heal(this.runMods.vampiricHeal);
+        if (healed > 0) this.showPopup(this.player.x, this.player.y - 36, `+${healed}`, '#72ff9f');
+      }
     } else {
       sfxEnemyHit();
     }
 
-    // Chain (Drone Swarm). Each chain hop deals the same damage; chain count
-    // is capped per shot. We chain from the last hit location, not the player,
-    // so the tracer visually walks across the field.
-    const chains = this.powerupSystem.getChainCount();
+    // Chain (Drone Swarm power-up + Chain Lightning drafted card). Each hop
+    // deals the same damage; total hops = power-up chain + drafted chainBonus.
+    const chains = this.powerupSystem.getChainCount() + this.runMods.chainBonus;
     if (chains <= 0) return;
     let fromX = tx;
     let fromY = ty;
@@ -928,11 +1028,12 @@ export class RaidScene extends Phaser.Scene {
   }
 
   // §19.4 damage popups: combo >= 2 reads bigger + brighter so high-combo
-  // kills feel punchy. Shared with normal and chain hits.
-  private showDamagePopup(x: number, y: number, damage: number, baseColor: string = '#ffffff'): void {
-    const big = this.combo >= 2.0;
+  // kills feel punchy. Shared with normal and chain hits. M15 adds a crit
+  // path that always renders big/red regardless of combo.
+  private showDamagePopup(x: number, y: number, damage: number, baseColor: string = '#ffffff', crit: boolean = false): void {
+    const big = this.combo >= 2.0 || crit;
     const fontSize = big ? '20px' : '14px';
-    const color = big ? '#ffd75a' : baseColor;
+    const color = crit ? '#ff416b' : (big ? '#ffd75a' : baseColor);
     if (this.activePopups >= Balance.performance.maxPopups) return;
     this.activePopups++;
     const t = this.add.text(x, y, `-${Math.round(damage)}`, {
