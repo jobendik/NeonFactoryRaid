@@ -148,6 +148,17 @@ export const Balance = {
   particles: {
     enemyDeathCount: 10,
   },
+  magnet: {
+    baseRadius: 130,
+    radiusPerLevel: 18,
+    collectRadiusBoost: 4,
+    popOutSpeedMin: 80,
+    popOutSpeedMax: 180,
+    popOutDrag: 240,
+    minPullSpeed: 220,
+    maxPullSpeed: 880,
+    pickupLifespanSec: 14,
+  },
 } as const;
 
 export type BalanceConfig = typeof Balance;

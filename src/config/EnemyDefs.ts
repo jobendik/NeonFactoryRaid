@@ -13,8 +13,12 @@ export interface EnemyDef {
   color: number;
   textureKey: string;
   shape: 'triangle' | 'square' | 'pentagon';
+  scrapDrop: number;
+  coreChance: number;
+  contactDamage: number;
 }
 
+// Drop counts and core chances from blueprint §14.3.
 export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
   grunt: {
     hp: 22,
@@ -23,6 +27,9 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     color: Balance.colors.enemyGrunt,
     textureKey: 'enemy-grunt',
     shape: 'triangle',
+    scrapDrop: 4,
+    coreChance: 0.11,
+    contactDamage: 10,
   },
 };
 

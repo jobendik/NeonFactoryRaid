@@ -1,11 +1,13 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
+import { Pickup, type PickupType } from '../entities/Pickup';
 import { InputSystem } from '../systems/InputSystem';
 import { WaveDirector } from '../systems/WaveDirector';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { ParticleEffects } from '../systems/ParticleEffects';
 import { Balance } from '../config/Balance';
+import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
 
 // RaidScene is the testbed for Milestones 1-5. Factory hub comes later.
@@ -14,9 +16,11 @@ export class RaidScene extends Phaser.Scene {
   private player!: Player;
   private inputSystem!: InputSystem;
   private enemies!: Phaser.GameObjects.Group;
+  private pickups!: Phaser.GameObjects.Group;
   private waveDirector!: WaveDirector;
   private weapons!: WeaponSystem;
   private particles!: ParticleEffects;
+  private runLoot = { scrap: 0, cores: 0 };
 
   constructor() {
     super({ key: 'RaidScene' });
@@ -47,6 +51,12 @@ export class RaidScene extends Phaser.Scene {
       maxSize: Balance.enemies.maxOnScreen,
       runChildUpdate: false,
     });
+    this.pickups = this.add.group({
+      classType: Pickup,
+      maxSize: Balance.performance.maxPickups,
+      runChildUpdate: false,
+    });
+    this.physics.add.overlap(this.player, this.pickups, this.onPickupOverlap, undefined, this);
 
     this.waveDirector = new WaveDirector(this.enemies, () => ({
       x: this.player.x,
@@ -61,7 +71,40 @@ export class RaidScene extends Phaser.Scene {
       () => this.enemies.getChildren(),
     );
 
+    this.runLoot.scrap = 0;
+    this.runLoot.cores = 0;
+
     bus.emit(Events.RAID_STARTED);
+  }
+
+  private onPickupOverlap: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_playerObj, pickupObj) => {
+    const p = pickupObj as Pickup;
+    if (!p.active) return;
+    if (p.type === 'scrap') this.runLoot.scrap += p.value;
+    else this.runLoot.cores += p.value;
+    const type: PickupType = p.type;
+    const value = p.value;
+    p.kill();
+    bus.emit(Events.PICKUP_COLLECTED, type, value);
+  };
+
+  private spawnDrops(enemy: Enemy): void {
+    const def = EnemyDefs[enemy.kind];
+    const ex = enemy.x;
+    const ey = enemy.y;
+    for (let i = 0; i < def.scrapDrop; i++) {
+      const p = this.pickups.get(ex, ey) as Pickup | null;
+      if (!p) break;
+      p.spawn(ex, ey, 'scrap');
+    }
+    if (Math.random() < def.coreChance) {
+      const p = this.pickups.get(ex, ey) as Pickup | null;
+      if (p) p.spawn(ex, ey, 'core');
+    }
+  }
+
+  getRunLoot(): { scrap: number; cores: number } {
+    return { scrap: this.runLoot.scrap, cores: this.runLoot.cores };
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -78,11 +121,18 @@ export class RaidScene extends Phaser.Scene {
     if (hit) {
       const killed = hit.target.hit(hit.damage);
       if (killed) {
-        this.particles.enemyDeath(hit.target.kind, hit.target.x, hit.target.y);
         const dead = hit.target;
+        this.particles.enemyDeath(dead.kind, dead.x, dead.y);
+        this.spawnDrops(dead);
         dead.kill();
         bus.emit(Events.ENEMY_KILLED, dead);
       }
+    }
+
+    const magnetRadius = Balance.magnet.baseRadius;
+    for (const child of this.pickups.getChildren()) {
+      const p = child as Pickup;
+      if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
   }
 
