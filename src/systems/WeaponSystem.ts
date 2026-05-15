@@ -28,11 +28,21 @@ export interface EnemyListProvider {
   (): Phaser.GameObjects.GameObject[];
 }
 
+import type { SpatialGrid } from './SpatialGrid';
+
+export interface EnemyGridProvider {
+  (): SpatialGrid<Enemy> | null;
+}
+
 export class WeaponSystem {
   private scene: Phaser.Scene;
   private getPlayer: PlayerPositionProvider;
   private getEnemies: EnemyListProvider;
+  private getEnemyGrid: EnemyGridProvider | null;
   private rng: Rng;
+  // Scratch buffer reused across calls to keep the WeaponSystem allocation-
+  // free in the hot path. Mutated each call; do not hold references.
+  private gridQueryScratch: Enemy[] = [];
   private fireTimer = 0;
   private damageLevel = 0;
   private damageMult = 1;
@@ -48,11 +58,18 @@ export class WeaponSystem {
   private modCritMult = 3;
   private modBonusTargets = 0;
 
-  constructor(scene: Phaser.Scene, getPlayer: PlayerPositionProvider, getEnemies: EnemyListProvider, rng: Rng) {
+  constructor(
+    scene: Phaser.Scene,
+    getPlayer: PlayerPositionProvider,
+    getEnemies: EnemyListProvider,
+    rng: Rng,
+    getEnemyGrid: EnemyGridProvider | null = null,
+  ) {
     this.scene = scene;
     this.getPlayer = getPlayer;
     this.getEnemies = getEnemies;
     this.rng = rng;
+    this.getEnemyGrid = getEnemyGrid;
   }
 
   setDamageLevel(level: number): void {
@@ -127,19 +144,36 @@ export class WeaponSystem {
   // Returns the `n` nearest enemies within range. Used both for normal firing
   // (n=1) and Laser Overdrive (n=2). Chain shots use a different chainRadius
   // and are processed by RaidScene, not here.
+  //
+  // M21: when a SpatialGrid provider is supplied (RaidScene rebuilds the
+  // grid once per frame), we query only the cells within `range` of the
+  // player instead of iterating the whole enemy group. Falls back to the
+  // O(n) scan when no grid is present (e.g. tests).
   private findNearestInRange(n: number): Enemy[] {
     const range = Balance.weapon.baseRange + this.damageLevel * Balance.weapon.rangePerDamage;
     const range2 = range * range;
     const p = this.getPlayer();
     const candidates: Array<{ e: Enemy; d2: number }> = [];
-    const list = this.getEnemies();
-    for (const obj of list) {
-      const e = obj as Enemy;
-      if (!e.active) continue;
-      const dx = e.x - p.x;
-      const dy = e.y - p.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < range2) candidates.push({ e, d2 });
+    const grid = this.getEnemyGrid ? this.getEnemyGrid() : null;
+    if (grid) {
+      const nearby = grid.queryNearby(p.x, p.y, range, this.gridQueryScratch);
+      for (const e of nearby) {
+        if (!e.active) continue;
+        const dx = e.x - p.x;
+        const dy = e.y - p.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < range2) candidates.push({ e, d2 });
+      }
+    } else {
+      const list = this.getEnemies();
+      for (const obj of list) {
+        const e = obj as Enemy;
+        if (!e.active) continue;
+        const dx = e.x - p.x;
+        const dy = e.y - p.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < range2) candidates.push({ e, d2 });
+      }
     }
     candidates.sort((a, b) => a.d2 - b.d2);
     return candidates.slice(0, n).map(c => c.e);

@@ -7,7 +7,9 @@ import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 import type { OperatorId } from '../config/OperatorDefs';
 
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
+
+export type QualityPreset = 'low' | 'medium' | 'high';
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -92,6 +94,15 @@ export interface SaveData {
   // M20 — last raid completion date (YYYY-MM-DD UTC). Gates DAILY CRATE
   // ("once per day after first raid of the day").
   lastRaidDate: string;
+  // M21 — player settings persisted across sessions. qualityAutoDetect
+  // controls whether the QualityManager may force a preset change based on
+  // rolling FPS; the upgrade-to-high prompt has been shown at most once
+  // (qualityUpgradeOffered) so it doesn't keep nagging.
+  settings: {
+    qualityPreset: QualityPreset;
+    qualityAutoDetect: boolean;
+    qualityUpgradeOffered: boolean;
+  };
   tutorialDone: boolean;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
   // tutorial); successfulExtracts only on extract. ftueUnlocks is the
@@ -150,6 +161,11 @@ export function createDefaultSave(): SaveData {
     },
     tryOutOperator: null,
     lastRaidDate: '',
+    settings: {
+      qualityPreset: Balance.quality.defaultPreset,
+      qualityAutoDetect: true,
+      qualityUpgradeOffered: false,
+    },
     tutorialDone: false,
     raidsCompleted: 0,
     successfulExtracts: 0,
@@ -285,6 +301,19 @@ function migrateV6toV7(v6: MigratingSave): MigratingSave {
   };
 }
 
+// v7 → v8: M21 adds settings (qualityPreset / autoDetect / upgradeOffered).
+function migrateV7toV8(v7: MigratingSave): MigratingSave {
+  return {
+    ...v7,
+    version: 8,
+    settings: {
+      qualityPreset: Balance.quality.defaultPreset,
+      qualityAutoDetect: true,
+      qualityUpgradeOffered: false,
+    },
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -304,13 +333,14 @@ function migrate(raw: unknown): SaveData {
   if (save.version === 4) save = migrateV4toV5(save);
   if (save.version === 5) save = migrateV5toV6(save);
   if (save.version === 6) save = migrateV6toV7(save);
+  if (save.version === 7) save = migrateV7toV8(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 7) save = migrateV7toV8(save);
+  //   if (save.version === 8) save = migrateV8toV9(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

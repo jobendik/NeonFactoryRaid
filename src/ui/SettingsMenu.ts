@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { AudioBus, type AudioVolumes } from '../audio/AudioBus';
+import { QualityManager } from '../systems/QualityManager';
+import { saveSystem, type QualityPreset } from '../platform/SaveSystem';
 
 // SettingsMenu scaffold per blueprint §21.6. M13 ships only audio controls:
 // Master / Music / SFX sliders. Quality, key bindings, and the reset-save
@@ -21,7 +23,7 @@ interface SliderHandle {
 }
 
 const PANEL_W = 420;
-const PANEL_H = 320;
+const PANEL_H = 440;
 const ROW_Y_GAP = 56;
 const SLIDER_W = 240;
 const SLIDER_H = 14;
@@ -34,6 +36,9 @@ export class SettingsMenu {
   private backdrop: Phaser.GameObjects.Rectangle | null = null;
   private sliders: SliderHandle[] = [];
   private dragHandle: SliderHandle | null = null;
+  // M21 — quality preset row + auto-detect toggle. Built once per open();
+  // mutating them rebuilds the row to reflect the new active state.
+  private qualityRowObjects: Phaser.GameObjects.GameObject[] = [];
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -89,6 +94,9 @@ export class SettingsMenu {
       this.sliders.push(this.buildSlider(ch.label, ch.key, volumes[ch.key], y));
     }
 
+    // M21 — quality preset row + auto-detect toggle below the audio sliders.
+    this.buildQualityRow(80 + channels.length * ROW_Y_GAP + 10);
+
     const closeBtn = scene.add
       .rectangle(PANEL_W / 2, PANEL_H - 44, 140, 36, 0x22f6ff, 1)
       .setOrigin(0.5, 0.5)
@@ -116,10 +124,104 @@ export class SettingsMenu {
     this.scene.input.off('pointerup', this.onPointerUp, this);
     this.dragHandle = null;
     this.sliders = [];
+    this.qualityRowObjects = [];
     this.root?.destroy(true);
     this.root = null;
     this.backdrop?.destroy();
     this.backdrop = null;
+  }
+
+  // M21 — quality preset selector + auto-detect toggle (§24.3 / §24.4).
+  private buildQualityRow(y: number): void {
+    const scene = this.scene;
+    if (!this.root) return;
+    // Wipe and rebuild so calls during re-render are idempotent.
+    for (const o of this.qualityRowObjects) o.destroy();
+    this.qualityRowObjects = [];
+
+    const labelX = (PANEL_W - SLIDER_W) / 2;
+    const label = scene.add.text(labelX, y, 'QUALITY', {
+      fontFamily: 'monospace',
+      fontSize: '13px',
+      color: '#ffffff',
+    });
+    this.root.add(label);
+    this.qualityRowObjects.push(label);
+
+    // Three preset pills (LOW / MED / HIGH).
+    const presets: Array<{ id: QualityPreset; label: string }> = [
+      { id: 'low', label: 'LOW' },
+      { id: 'medium', label: 'MED' },
+      { id: 'high', label: 'HIGH' },
+    ];
+    const pillW = 72;
+    const pillH = 24;
+    const pillGap = 6;
+    const currentPreset = QualityManager.getPreset();
+    const rowY = y + 22;
+    for (let i = 0; i < presets.length; i++) {
+      const p = presets[i];
+      const px = labelX + i * (pillW + pillGap);
+      const selected = currentPreset === p.id;
+      const bg = scene.add
+        .rectangle(px, rowY, pillW, pillH, selected ? 0x22f6ff : 0x222a36, 1)
+        .setOrigin(0, 0)
+        .setStrokeStyle(1, 0xffffff, selected ? 0.95 : 0.4)
+        .setInteractive({ useHandCursor: true });
+      const labelTxt = scene.add
+        .text(px + pillW / 2, rowY + pillH / 2, p.label, {
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          color: selected ? '#000000' : '#ffffff',
+        })
+        .setOrigin(0.5);
+      bg.on('pointerdown', () => {
+        QualityManager.setPreset(p.id, 'user');
+        // Persist immediately so a refresh keeps the choice.
+        void saveSystem.persist();
+        this.buildQualityRow(y);
+      });
+      this.root.add(bg);
+      this.root.add(labelTxt);
+      this.qualityRowObjects.push(bg);
+      this.qualityRowObjects.push(labelTxt);
+    }
+
+    // Auto-detect toggle. Disabled when the user wants strict control.
+    const autoY = rowY + pillH + 12;
+    const autoOn = QualityManager.isAutoDetectEnabled();
+    const autoBg = scene.add
+      .rectangle(labelX, autoY, 18, 18, autoOn ? 0x22f6ff : 0x222a36, 1)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.7)
+      .setInteractive({ useHandCursor: true });
+    if (autoOn) {
+      const check = scene.add
+        .text(labelX + 9, autoY + 9, '✓', {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: '#000000',
+        })
+        .setOrigin(0.5);
+      this.root.add(check);
+      this.qualityRowObjects.push(check);
+    }
+    const autoLabel = scene.add
+      .text(labelX + 28, autoY + 9, 'AUTO-DETECT', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#88a0a8',
+      })
+      .setOrigin(0, 0.5);
+    autoBg.on('pointerdown', () => {
+      QualityManager.setAutoDetectEnabled(!autoOn);
+      void saveSystem.persist();
+      this.buildQualityRow(y);
+    });
+    this.root.add(autoBg);
+    this.root.add(autoLabel);
+    this.qualityRowObjects.push(autoBg);
+    this.qualityRowObjects.push(autoLabel);
   }
 
   private buildSlider(label: string, channel: keyof AudioVolumes, initial: number, y: number): SliderHandle {

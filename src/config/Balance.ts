@@ -179,6 +179,46 @@ export const Balance = {
     maxPopups: 70,
     maxPickups: 220,
     dtClamp: 0.033,
+    // M21 spatial-grid cell size for nearest-enemy + pickup-magnet queries.
+    // 120px works well at world-bounds 1600x1120 — small enough to keep
+    // bucket sizes low (≤4 enemies/cell typical) without producing too
+    // many cells (≈ 14×10 = 140 buckets max).
+    spatialGridCellPx: 120,
+  },
+  // §24 quality + auto-detect tuning. Default preset is medium; auto-detect
+  // can drop to low on sustained <40fps. The dprCap is reserved for future
+  // canvas-resolution work; the rest are live caps read each frame.
+  quality: {
+    defaultPreset: 'medium' as const,
+    presets: {
+      low: {
+        dprCap: 1.0,
+        maxParticles: 120,
+        glow: false,
+        parallaxLayers: 0,
+        enemyCap: 20,
+      },
+      medium: {
+        dprCap: 1.5,
+        maxParticles: 240,
+        glow: false,
+        parallaxLayers: 2,
+        enemyCap: 28,
+      },
+      high: {
+        dprCap: 2.0,
+        maxParticles: 360,
+        glow: true,
+        parallaxLayers: 3,
+        enemyCap: 32,
+      },
+    },
+    // Rolling-FPS auto-detect: drop to Low when avg < N for `downgradeWindow`
+    // sustained; offer High (one-time) when avg > M for `upgradeWindow` sustained.
+    autoDowngradeBelowFps: 40,
+    autoUpgradeAboveFps: 58,
+    autoDowngradeWindowSec: 5,
+    autoUpgradeWindowSec: 30,
   },
   rendering: {
     width: 1280,

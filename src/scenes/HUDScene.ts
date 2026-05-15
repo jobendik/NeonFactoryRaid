@@ -6,6 +6,7 @@ import { InfestationSystem } from '../systems/InfestationSystem';
 import { MuteButton } from '../ui/MuteButton';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { AudioBus } from '../audio/AudioBus';
+import { QualityManager } from '../systems/QualityManager';
 import type { RaidScene } from './RaidScene';
 import type { FactoryScene } from './FactoryScene';
 
@@ -78,6 +79,11 @@ export class HUDScene extends Phaser.Scene {
   private powerupPips: PowerupPip[] = [];
   private shieldPip!: PowerupPip;
   private settingsMenu!: SettingsMenu;
+  // M21 — performance overlay (§24.5). Hidden by default; backtick toggles.
+  private perfOverlay: Phaser.GameObjects.Text | null = null;
+  private perfOverlayOn = false;
+  // FPS sampling for the rolling auto-detect window.
+  private autoDetectAccum = 0;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -263,6 +269,30 @@ export class HUDScene extends Phaser.Scene {
     this.input.on('pointerdown', unlock);
     const keyboard = this.input.keyboard;
     if (keyboard) keyboard.on('keydown', unlock);
+
+    // M21 — performance overlay toggle (backtick). Pure dev tool; left in
+    // production but undocumented per §24.5.
+    this.perfOverlay = this.add
+      .text(this.scale.width - 12, this.scale.height - 12, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#88a0a8',
+        backgroundColor: '#0a1014',
+        padding: { x: 8, y: 6 },
+        align: 'right',
+      })
+      .setOrigin(1, 1)
+      .setScrollFactor(0)
+      .setDepth(2400)
+      .setVisible(false);
+    if (keyboard) {
+      keyboard.on('keydown-BACKTICK', () => this.togglePerfOverlay());
+    }
+  }
+
+  private togglePerfOverlay(): void {
+    this.perfOverlayOn = !this.perfOverlayOn;
+    if (this.perfOverlay) this.perfOverlay.setVisible(this.perfOverlayOn);
   }
 
   // Gear icon to the left of the mute button. Opens the SettingsMenu modal.
@@ -331,11 +361,23 @@ export class HUDScene extends Phaser.Scene {
     return { bg, fill, text };
   }
 
-  override update(time: number): void {
+  override update(time: number, deltaMs: number): void {
+    const fps = this.game.loop.actualFps;
     if (time - this.lastFpsUpdate > Balance.ui.fpsUpdateMs) {
       this.lastFpsUpdate = time;
-      const fps = Math.round(this.game.loop.actualFps);
-      this.fpsText.setText(`${Strings.fps}: ${fps}`);
+      this.fpsText.setText(`${Strings.fps}: ${Math.round(fps)}`);
+    }
+
+    // M21 — auto-detect tick + optional toast on preset change.
+    const dt = Math.min(0.1, deltaMs / 1000);
+    const toast = QualityManager.tick(dt, fps);
+    if (toast) this.showAutoQualityToast(toast);
+
+    // M21 — performance overlay refresh (1/4-second cadence so the text
+    // doesn't flicker; same cadence as FPS).
+    if (this.perfOverlayOn && time - this.autoDetectAccum > 250) {
+      this.autoDetectAccum = time;
+      this.renderPerfOverlay(fps);
     }
 
     const raid = this.scene.get('RaidScene') as RaidScene | undefined;
@@ -351,6 +393,70 @@ export class HUDScene extends Phaser.Scene {
     }
 
     this.clearRaidHud();
+  }
+
+  // M21 — small bottom-center toast surfaced when QualityManager auto-changes
+  // preset or unlocks the upgrade prompt. Mirrors the offline-scrap toast in
+  // FactoryScene visually so the player sees the same affordance.
+  private showAutoQualityToast(text: string): void {
+    const t = this.add
+      .text(this.scale.width / 2, this.scale.height - 40, text, {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#22f6ff',
+        stroke: '#000000',
+        strokeThickness: 3,
+        backgroundColor: '#0a1014',
+        padding: { x: 12, y: 6 },
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(2350)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      y: this.scale.height - 60,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(3500, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => t.destroy(),
+      });
+    });
+  }
+
+  private renderPerfOverlay(fps: number): void {
+    if (!this.perfOverlay) return;
+    const raid = this.scene.get('RaidScene') as RaidScene | undefined;
+    let enemyCount = 0;
+    let pickupCount = 0;
+    let bulletCount = 0;
+    let powerupCount = 0;
+    if (raid && raid.scene.isActive()) {
+      const counts = raid.getEntityCounts();
+      enemyCount = counts.enemies;
+      pickupCount = counts.pickups;
+      bulletCount = counts.bullets;
+      powerupCount = counts.powerups;
+    }
+    const preset = QualityManager.getPreset();
+    const dpr = QualityManager.dprCap();
+    const ft = fps > 0 ? (1000 / fps).toFixed(1) : '—';
+    const lines = [
+      `FPS:    ${Math.round(fps)}  (${ft} ms)`,
+      `Enem:   ${enemyCount}`,
+      `Pick:   ${pickupCount}`,
+      `Bull:   ${bulletCount}`,
+      `Pow:    ${powerupCount}`,
+      `Qual:   ${preset.toUpperCase()}`,
+      `DPRcap: ${dpr.toFixed(1)}`,
+    ];
+    this.perfOverlay.setText(lines.join('\n'));
   }
 
   private renderRaid(raid: RaidScene): void {

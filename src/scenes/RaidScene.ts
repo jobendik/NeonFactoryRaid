@@ -32,6 +32,7 @@ import type { DraftSceneInit } from './DraftScene';
 import { Rng, dailySeed } from '../core/Rng';
 import { SDKBridge } from '../platform/SDKBridge';
 import { AdManager } from '../platform/AdManager';
+import { SpatialGrid } from '../systems/SpatialGrid';
 import {
   sfxCore,
   sfxScrap,
@@ -145,6 +146,13 @@ export class RaidScene extends Phaser.Scene {
   // M20 — async ad flow gate. While a modal is being shown for REVIVE /
   // EXTEND RUN, the raid is paused; update() guards against re-entry.
   private adInFlight = false;
+  // M21 — spatial grids rebuilt once per frame so WeaponSystem and the
+  // pickup-magnet loop run in O(cells visited) instead of O(group size).
+  private enemyGrid = new SpatialGrid<Enemy>();
+  private pickupGrid = new SpatialGrid<Pickup>();
+  private pickupScratch: Pickup[] = [];
+  private powerupScratch: Powerup[] = [];
+  private powerupGrid = new SpatialGrid<Powerup>();
   private onPlayerDied = (): void => {
     void this.handlePlayerDied();
   };
@@ -246,6 +254,7 @@ export class RaidScene extends Phaser.Scene {
       () => ({ x: this.player.x, y: this.player.y }),
       () => this.enemies.getChildren(),
       this.rng,
+      () => this.enemyGrid,
     );
     this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
     if (this.isTutorial) this.weapons.setDamageMult(Balance.tutorial.playerDamageMult);
@@ -440,6 +449,14 @@ export class RaidScene extends Phaser.Scene {
     this.greed.update(dt);
     this.powerupSystem.update(dt);
 
+    // M21 — rebuild spatial grids once per frame against the live group
+    // contents. Cheap enough to do unconditionally (the grids re-use bucket
+    // arrays). WeaponSystem reads enemyGrid; the magnet loop below reads
+    // pickupGrid + powerupGrid.
+    this.enemyGrid.rebuild(this.enemies.getChildren() as unknown as Iterable<Enemy>);
+    this.pickupGrid.rebuild(this.pickups.getChildren() as unknown as Iterable<Pickup>);
+    this.powerupGrid.rebuild(this.powerups.getChildren() as unknown as Iterable<Powerup>);
+
     if (this.isTutorial) this.tickTutorial(dt);
 
     // Push current power-up state into the weapon. Cheap to do every frame -
@@ -471,15 +488,27 @@ export class RaidScene extends Phaser.Scene {
       this.powerupSystem.getMagnetMult() *
       this.runMods.magnetMult *
       magnetStormMult;
-    for (const child of this.pickups.getChildren()) {
-      const p = child as Pickup;
+    // M21 — spatial-grid query instead of full-group scan. Anything past
+    // magnetRadius cannot be pulled this frame; the grid skips those cells.
+    const nearPickups = this.pickupGrid.queryNearby(
+      this.player.x,
+      this.player.y,
+      magnetRadius,
+      this.pickupScratch,
+    );
+    for (const p of nearPickups) {
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
     // Powerups magnetize on the same radius but with a separate, more
     // forgiving pull profile (Powerup.updateMagnet's internal speeds).
-    for (const child of this.powerups.getChildren()) {
-      const p = child as Powerup;
+    const nearPowerups = this.powerupGrid.queryNearby(
+      this.player.x,
+      this.player.y,
+      magnetRadius,
+      this.powerupScratch,
+    );
+    for (const p of nearPowerups) {
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
@@ -1367,6 +1396,20 @@ export class RaidScene extends Phaser.Scene {
   // least one charge. The charge isn't timed - it lives on the Player.
   getShieldCharges(): number {
     return this.player.shieldCharges;
+  }
+
+  // M21 — entity counts read by the performance overlay (§24.5). Live
+  // counts of active group members; no allocation.
+  getEntityCounts(): { enemies: number; pickups: number; bullets: number; powerups: number } {
+    let e = 0;
+    let p = 0;
+    let b = 0;
+    let pw = 0;
+    for (const c of this.enemies.getChildren()) if (c.active) e++;
+    for (const c of this.pickups.getChildren()) if (c.active) p++;
+    for (const c of this.bullets.getChildren()) if (c.active) b++;
+    for (const c of this.powerups.getChildren()) if (c.active) pw++;
+    return { enemies: e, pickups: p, bullets: b, powerups: pw };
   }
 
   private spawnRadialFlash(): void {
