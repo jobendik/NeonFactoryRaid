@@ -294,6 +294,31 @@ export const Balance = {
     vampiricChanceAdd: 0.10,
     vampiricHeal: 5,
   },
+  // §17 rewarded ad placements. All tuning lives here so the §17.3 frequency
+  // rules are one-file changes if we revisit them. Real ads are post-launch;
+  // M20 wires through SDKBridge.requestRewarded() which returns success in
+  // dev so the reward flows are testable.
+  ads: {
+    // REVIVE — gated behind `raidsCompleted >= reviveAfterRaidsCompleted` at
+    // time of death (tutorial counts). Probabilistic so revive doesn't feel
+    // like a guaranteed crutch.
+    reviveAfterRaidsCompleted: 3,
+    reviveProbability: 0.75,
+    reviveHpRatio: 0.6,
+    reviveInvulnSec: 2.2,
+    // EXTEND RUN — +Nsec to the raid timer. Single use per raid (RaidScene
+    // tracks the per-raid flag).
+    extendRunSeconds: 30,
+    // FACTORY BOOST — 2x SPM for N ms, real-time cooldown of M ms.
+    factoryBoostDurationMs: 120_000,   // 2 minutes
+    factoryBoostCooldownMs: 600_000,   // 10 minutes
+    // DAILY CRATE — once per UTC day after the day's first raid. Rolls
+    // a small Scrap range or a single Core.
+    dailyCrateScrapMin: 100,
+    dailyCrateScrapMax: 500,
+    dailyCrateScrapProbability: 0.6,
+    dailyCrateCoreReward: 1,
+  },
   factory: {
     backgroundColor: '#04080c',
     generatorPositions: [

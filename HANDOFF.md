@@ -1,4 +1,4 @@
-# HANDOFF — Milestones 1–19 (Run C added M15–M19)
+# HANDOFF — Milestones 1–20 (Run D started; M20 done)
 
 ## What runs end-to-end
 
@@ -18,11 +18,15 @@ operator picker + DAILY SEED + TODAY'S BOARD. Save migrates v0–v6.
 | M17 | Infestation system (the differentiator) |
 | M18 | Daily quest + streak with 1-day forgiveness |
 | M19 | RNG audit + daily seed leaderboard (GATE 3) |
+| M20 | All 7 rewarded ad placements wired through SDKBridge stub |
 
 ## Current state
 
 - `npm install && npm run typecheck && npm run build` — all green.
-- SaveData at v6. Migrations v0→v1 (discard) → v2 → v3 → v4 → v5 → v6.
+- SaveData at v7. Migrations v0→v1 (discard) → v2 → v3 → v4 → v5 → v6 → v7.
+- M20 ships 7 rewarded ad placements; SDKBridge stub still returns
+  `{ success: true }` so reward flows are testable in dev. Real SDK swap
+  is a single-file change at launch.
 
 ## Run C decisions
 
@@ -41,15 +45,14 @@ operator picker + DAILY SEED + TODAY'S BOARD. Save migrates v0–v6.
 
 ## Open TODOs (carried forward)
 
-1. **§8.5 milestone visuals** still pending (deferred to Run D polish).
+1. **§8.5 milestone visuals** still pending (M22 target).
 2. **6 deferred drafting cards** in CardDefs.ts: Ricochet, Slow Field,
    Frenzy Mode, Nova Dash, Time Dilation, Pyrokinetic.
 3. **Deferred power-ups**: Golden Fever, Turret Drop.
 4. **Deferred enemies**: Bomber, Loot Goblin, Shield Carrier, Splitter,
    Extract Jammer, Signal Hydra.
 5. **Operators 3 & 4** (Surge, Lodestone): metadata-only, locked.
-6. **[M20] stubs**: Clear Infestation ad, Double Loot ad.
-7. **Real CrazyGames SDK**: SDKBridge stub stays.
+6. **Real CrazyGames SDK**: SDKBridge stub stays (post-launch swap).
 
 ## Status notes — answers to the four questions
 
@@ -156,11 +159,11 @@ src/
 Stubs left: scenes/PreloadScene + ModalScene; systems/AchievementSystem;
 ui/{HUD, Modal, SummaryScreen}; platform/Analytics.
 
-## SaveData v6 (additions over v2)
+## SaveData v7 (additions over v2)
 
 ```ts
 {
-  version: 6,
+  version: 7,
   selectedOperator, unlockedOperators,           // M16
   infestation: { machineIds, failsBeforeFirst }, // M17
   infestationTutorialSeen,                       // M17
@@ -171,17 +174,88 @@ ui/{HUD, Modal, SummaryScreen}; platform/Analytics.
   cosmeticShards,                                // M18
   dailySeedAttempted,                            // M19
   dailySeedHistory: [{date, score}, ...],        // M19 (cap 30)
+  adState: {                                     // M20
+    factoryBoostLastMs, factoryBoostActiveUntilMs,
+    lastDailyCrate,
+  },
+  tryOutOperator,                                // M20 — one-raid override
+  lastRaidDate,                                  // M20 — daily-crate gating
 }
 ```
 
-## What M20 should tackle first
+## M20 — seven rewarded ad placements (blueprint §17.2)
 
-Per Run D's billing (ads, polish, perf, submission):
+All seven route through `SDKBridge.requestRewarded()` via `AdManager.offer()`,
+which launches `ModalScene` for the player's accept/decline. Stub returns
+`{ success: true }` so reward flows are exercised end-to-end in dev.
 
-1. **CrazyGames rewarded ads** per §17.2 (Revive, Double Loot, Extend
-   Run, Factory Boost, Clear Infestation, Daily Crate, Operator
-   Try-Out). SDKBridge already stubs the surface.
-2. **PreloadScene** — bake textures once instead of at scene-create.
-3. **§8.5 milestone visuals** land here.
-4. **Performance pass**: entity caps under load, particle batching.
-5. **Submission checklist** (Appendix C of blueprint).
+| # | Placement | Trigger | Reward | File |
+|---:|---|---|---|---|
+| 1 | **REVIVE** | `PLAYER_DIED` after `raidsCompleted >= 3`, 75% probability per death (not tutorial) | HP → 60%, 2.2s invuln, resume run | `RaidScene.handlePlayerDied` |
+| 2 | **DOUBLE LOOT** | Successful extraction summary (suppressed if REVIVE was shown) | Doubles run loot, composes with greed | `SummaryScene.handleDoubleLoot` |
+| 3 | **EXTEND RUN** | Timer hits 0 in active raid, single use per run (not tutorial) | +30s on raid timer | `RaidScene.handleTimerExpired` |
+| 4 | **FACTORY BOOST** | Factory hub, gated `ftueUnlocks.factoryBoost` (5+ raids), 10 min real-time cooldown | 2x SPM for 2 minutes; auto-read by `Economy.computeSpm` | `FactoryScene.handleFactoryBoost` |
+| 5 | **CLEAR INFESTATION** | Factory hub when any machines infested | `InfestationSystem.clearAllInfestation()` | `FactoryScene.handleClearInfestation` |
+| 6 | **DAILY CRATE** | Factory hub when `lastRaidDate == today && lastDailyCrate != today` | 60% Scrap 100–500, 40% 1 Core | `FactoryScene.handleDailyCrate` |
+| 7 | **OPERATOR TRY-OUT** | Operator picker on implemented-but-unowned operator tiles (Vanta today; Surge/Lodestone post-launch) | `selectedOperator` becomes target for one raid; cleared at raid end | `FactoryScene.handleOperatorTryOut` |
+
+### §17.3 frequency rules (enforced)
+
+- Never during active raid gameplay — REVIVE & EXTEND RUN pause the raid
+  scene via `this.scene.pause()` before showing the modal.
+- Never in tutorial raid — REVIVE bails to immediate fail; EXTEND RUN
+  bails to immediate collapse.
+- Max 1 rewarded ad prompt per raid (REVIVE OR DOUBLE LOOT, not both) —
+  `AdManager.canOfferRaidPrompt()` flag, set on REVIVE, read by
+  SummaryScene via `payload.allowDoubleLoot`.
+- REVIVE 75% probability gate — `Math.random() < Balance.ads.reviveProbability`.
+- FACTORY BOOST 10-minute real-time cooldown — `adState.factoryBoostLastMs`
+  in SaveData; auto-displayed as `MM:SS` countdown in the panel.
+
+### §18.3 SDK lifecycle (verified wired)
+
+- `loadingStart()` — BootScene.create (was M0).
+- `loadingStop()` — BootScene.create (was M0).
+- `gameplayStart()` — RaidScene.create on every raid (including tutorial).
+- `gameplayStop()` — RaidScene.finishRaid on any end state.
+- `happytime()` — RaidScene.finishRaid on `state === 'extracted'` (before
+  gameplayStop).
+- `requestRewarded()` — `AdManager.offer` on every accepted modal.
+- `requestMidgame()` — not yet placed (deferred; blueprint §17.6 allows
+  every 3rd raid return-to-factory; can be added without surface change).
+
+### Files touched in M20
+
+- `src/platform/SaveSystem.ts` — v6 → v7 migration, new save fields.
+- `src/platform/AdManager.ts` — NEW. Per-raid mutex, modal launcher,
+  FactoryBoost cooldown / DailyCrate eligibility helpers.
+- `src/scenes/ModalScene.ts` — NEW (was stub). Reusable ad-confirmation modal.
+- `src/main.ts` — register ModalScene.
+- `src/config/Balance.ts` — `ads` section (cooldowns, probabilities,
+  reward rolls).
+- `src/config/Strings.ts` — ad copy + replace `[M20]` placeholders.
+- `src/scenes/RaidScene.ts` — REVIVE on death, EXTEND RUN on timer expiry,
+  SDK lifecycle calls, tryOutOperator + lastRaidDate stamping on raid end.
+- `src/scenes/SummaryScene.ts` — DOUBLE LOOT button, in-place wallet
+  refresh on grant.
+- `src/scenes/FactoryScene.ts` — left-edge ad panel (FACTORY BOOST, CLEAR
+  INFESTATION, DAILY CRATE) and per-operator-tile TRY-OUT pill.
+- `src/systems/EconomySystem.ts` — `computeSpm` auto-reads
+  `adState.factoryBoostActiveUntilMs`.
+- `src/systems/OperatorSystem.ts` — `getEffectiveForRaid` honors
+  `tryOutOperator`.
+- `src/entities/Player.ts` — `reviveToRatio(ratio, invulnSec)`.
+- `src/core/types.ts` — `RaidEndPayload.allowDoubleLoot`.
+
+## What M21 should tackle first
+
+Run D continues with the performance pass per §24:
+
+1. **Pooling audit** — verify killAndHide / setActive(false).setVisible(false)
+   on every Phaser Group (enemies, bullets, pickups, power-ups, particles).
+2. **Spatial grid** in WeaponSystem nearest-enemy queries (currently O(n) per
+   fire). Same grid usable for pickup-magnet queries.
+3. **QualityManager** in `/src/systems/` — three presets (Low/Medium/High),
+   auto-detect with 5s rolling FPS average.
+4. **Performance overlay** — backtick toggle, FPS / frame ms / entity counts.
+5. **Quality settings** in SettingsMenu, wire to Balance.quality.

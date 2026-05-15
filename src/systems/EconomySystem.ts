@@ -22,11 +22,15 @@ export const Economy = {
   // Per blueprint §8.7. Infestation ratio defaults to the live save state so
   // every caller (FactoryScene SPM display, generator drop cadence, offline
   // production) automatically zeroes-out infested machine contribution.
+  // M20: boostActive defaults to the persisted FACTORY BOOST window in
+  // SaveData.adState — Economy.computeSpm callers auto-double SPM while the
+  // boost is live without threading the flag.
   computeSpm(opts?: { boostActive?: boolean; infestationRatio?: number }): number {
     const save = saveSystem.get();
     const genLevel = Math.max(1, save.upgrades.gen);
     const droneLevel = Math.max(0, save.upgrades.drone);
-    const boost = opts?.boostActive ? Balance.economy.factoryBoostMult : 1;
+    const boostActive = opts?.boostActive ?? save.adState.factoryBoostActiveUntilMs > Date.now();
+    const boost = boostActive ? Balance.economy.factoryBoostMult : 1;
     const infest = clampInfestation(opts?.infestationRatio ?? InfestationSystem.getInfestationRatio());
     return Balance.economy.spm.base * genLevel * (1 + droneLevel * Balance.economy.spm.drone) * boost * (1 - infest);
   },

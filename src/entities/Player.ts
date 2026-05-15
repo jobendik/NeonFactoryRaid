@@ -262,6 +262,18 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     return applied;
   }
 
+  // M20 REVIVE — restore HP to a fraction of max with a brief invuln window.
+  // Used by the rewarded-ad revive path so the player resumes immediately
+  // after the modal closes without a death animation re-fire.
+  reviveToRatio(ratio: number, invulnSec: number): void {
+    if (ratio <= 0) return;
+    this.hp = Math.max(1, Math.round(this.maxHp * ratio));
+    this.hitInvulnTimer = Math.max(this.hitInvulnTimer, invulnSec);
+    this.setAlpha(1);
+    this.flashShieldBreak();
+    bus.emit(Events.PLAYER_DAMAGED, 0, this.hp);
+  }
+
   // Adds a shield charge from a Shield Bubble pickup. Multiple charges stack.
   addShieldCharge(): void {
     this.shieldCharges += 1;

@@ -16,7 +16,7 @@ export const Strings = {
   summaryCores: 'CORES',
   summaryFactory: 'FACTORY',
   summaryRedeploy: 'ONE MORE RAID',
-  summaryDoubleLoot: 'DOUBLE LOOT  [M20]',
+  summaryDoubleLoot: 'DOUBLE LOOT',
   summaryPenalty: '-50% UNBANKED LOOT',
   greedLabel: 'GREED',
   hpLabel: 'HP',
@@ -129,7 +129,7 @@ export const Strings = {
   infestationCleansingPrefix: 'Cleansing: ',
   infestationCleansingMid: ' / ',
   infestationCleansingSuffix: ' machines',
-  infestationClearAd: 'CLEAR INFESTATION  [M20]',
+  infestationClearAd: 'CLEAR INFESTATION',
 
   // M18 — daily quest + streak.
   questPanelTitle: 'DAILY QUEST',
@@ -154,6 +154,37 @@ export const Strings = {
   leaderboardYou: 'YOU',
   leaderboardClose: 'CLOSE',
   factoryDailySeedHint: 'Same seed, all players',
+
+  // M20 — rewarded ad copy. Modal title + description per placement plus
+  // common accept/decline button labels.
+  adWatchButton: 'WATCH AD',
+  adDeclineButton: 'NO THANKS',
+  adReviveTitle: 'REVIVE?',
+  adReviveDesc: 'Watch a short ad to revive at 60% HP and keep this raid going.',
+  adDoubleLootTitle: 'DOUBLE LOOT?',
+  adDoubleLootDesc: 'Watch a short ad to double your run loot.',
+  adExtendRunTitle: 'EXTEND RUN?',
+  adExtendRunDesc: 'Watch a short ad for +30 seconds on the raid timer.',
+  adFactoryBoostTitle: 'FACTORY BOOST?',
+  adFactoryBoostDesc: 'Watch a short ad for 2x Scrap Per Minute for 2 minutes.',
+  adClearInfestationTitle: 'CLEAR INFESTATION?',
+  adClearInfestationDesc: 'Watch a short ad to instantly restore every infested machine.',
+  adDailyCrateTitle: 'DAILY CRATE',
+  adDailyCrateDesc: 'Watch a short ad for a random daily reward.',
+  adOperatorTryOutTitle: 'TRY OPERATOR',
+  adOperatorTryOutDesc: 'Watch a short ad to play one raid with this operator.',
+  // Factory-side button labels for ad placements.
+  adFactoryBoostButton: 'FACTORY BOOST',
+  adFactoryBoostActive: 'BOOSTING',
+  adFactoryBoostCooldown: 'COOLDOWN',
+  adDailyCrateButton: 'DAILY CRATE',
+  adDailyCrateClaimed: 'CRATE CLAIMED',
+  adOperatorTryButton: 'TRY IN NEXT RAID',
+  adRewardScrapPrefix: '+',
+  adRewardScrapSuffix: ' Scrap from crate',
+  adRewardCore: '+1 Core from crate',
+  adRewardFailed: 'Ad failed — try again later',
+  adTryOutToast: 'Try-out queued — deploy to play one raid',
 } as const;
 
 export type StringKey = keyof typeof Strings;

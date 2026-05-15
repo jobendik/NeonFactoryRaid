@@ -21,6 +21,7 @@ import { DailyQuestSystem } from '../systems/DailyQuestSystem';
 import { StreakSystem } from '../systems/StreakSystem';
 import { LeaderboardSystem } from '../systems/LeaderboardSystem';
 import { todayUtcDate } from '../config/QuestDefs';
+import { AdManager } from '../platform/AdManager';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -67,6 +68,17 @@ export class FactoryScene extends Phaser.Scene {
   // M19 — daily seed deploy button + leaderboard button + leaderboard modal.
   private dailySeedObjects: Phaser.GameObjects.GameObject[] = [];
   private leaderboardObjects: Phaser.GameObjects.GameObject[] = [];
+  // M20 — rewarded-ad panel (FACTORY BOOST + CLEAR INFESTATION + DAILY CRATE).
+  // Sits on the left edge below the FPS counter. Refreshed on any state
+  // change (boost activated, infestation cleared, daily crate claimed) and
+  // re-ticked each second so the FACTORY BOOST cooldown label updates.
+  private adPanelObjects: Phaser.GameObjects.GameObject[] = [];
+  private adPanelLastSecond = -1;
+  private factoryBoostLabel: Phaser.GameObjects.Text | null = null;
+  private factoryBoostBg: Phaser.GameObjects.Rectangle | null = null;
+  // Pinned try-out toast (shown briefly after the player accepts the
+  // OPERATOR TRY-OUT ad). Destroyed automatically.
+  private tryOutToast: Phaser.GameObjects.Text | null = null;
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -116,9 +128,9 @@ export class FactoryScene extends Phaser.Scene {
     this.refreshDeployPrompt();
     this.maybeShowInfestationToast();
     this.maybeShowInfestationTutorialModal();
-    this.buildClearInfestationStub();
     this.buildQuestPanel();
     this.buildDailySeedAndLeaderboardButtons();
+    this.buildAdPanel();
     MusicEngine.startFactory();
   }
 
@@ -206,6 +218,7 @@ export class FactoryScene extends Phaser.Scene {
     }
 
     this.tickDeployPad(dt);
+    this.tickAdPanel();
   }
 
   shutdown(): void {
@@ -230,6 +243,9 @@ export class FactoryScene extends Phaser.Scene {
     this.destroyOperatorPanel();
     this.destroyQuestPanel();
     this.destroyDailySeedAndLeaderboard();
+    this.destroyAdPanel();
+    this.tryOutToast?.destroy();
+    this.tryOutToast = null;
   }
 
   // ---- accessors used by HUDScene ----
@@ -684,6 +700,52 @@ export class FactoryScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     this.operatorPanelObjects.push(hit);
     hit.on('pointerdown', () => this.handleOperatorTilePress(id));
+
+    // M20 OPERATOR TRY-OUT — implemented but not yet unlocked tiles get a
+    // small "TRY IN NEXT RAID" pill above the tile that routes through the
+    // rewarded-ad path. Tutorial-gated: don't surface this until the player
+    // is past the FTUE so the first impression isn't ad-cluttered.
+    const showTryOut =
+      !isUnlocked && saveSystem.get().tutorialDone && OperatorSystem.getTryOut() !== id;
+    if (showTryOut) {
+      const tryY = y - 22;
+      const tryBg = this.add
+        .rectangle(x + w / 2, tryY, w - 8, 18, 0xa76cff, 1)
+        .setStrokeStyle(1, 0xffffff, 0.9)
+        .setScrollFactor(0)
+        .setDepth(2053)
+        .setInteractive({ useHandCursor: true });
+      const tryLabel = this.add
+        .text(x + w / 2, tryY, Strings.adOperatorTryButton, {
+          fontFamily: 'monospace',
+          fontSize: '9px',
+          color: '#000000',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(2054);
+      this.operatorPanelObjects.push(tryBg);
+      this.operatorPanelObjects.push(tryLabel);
+      tryBg.on('pointerdown', () => {
+        void this.handleOperatorTryOut(id);
+      });
+    } else if (OperatorSystem.getTryOut() === id) {
+      // Already queued — show a confirming label so the player knows the
+      // next raid will use this operator.
+      const tryY = y - 22;
+      const queuedLabel = this.add
+        .text(x + w / 2, tryY, 'TRY QUEUED', {
+          fontFamily: 'monospace',
+          fontSize: '9px',
+          color: '#72ff9f',
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(2054);
+      this.operatorPanelObjects.push(queuedLabel);
+    }
   }
 
   private handleOperatorTilePress(id: OperatorId): void {
@@ -1189,27 +1251,265 @@ export class FactoryScene extends Phaser.Scene {
     this.closeLeaderboard();
   }
 
-  // [M20] stub button — disabled but visible so the player understands a
-  // "skip-the-cleanse" option is coming. Greyed and labelled per spec.
-  private buildClearInfestationStub(): void {
-    if (!InfestationSystem.hasInfestation()) return;
-    const x = this.scale.width / 2;
-    const y = this.scale.height - 240;
+  // M20 — left-edge rewarded-ad panel. Three buttons:
+  //   FACTORY BOOST  (gated on ftueUnlocks.factoryBoost; shows cooldown live)
+  //   CLEAR INFESTATION (visible only when any machines are infested)
+  //   DAILY CRATE (visible only when the player has raided today and not yet claimed)
+  // Each routes through AdManager.offer() which handles the modal + SDK call.
+  private buildAdPanel(): void {
+    this.destroyAdPanel();
+    const save = saveSystem.get();
+    const x = 12;
+    let y = 120;
+    const btnW = 220;
+    const btnH = 40;
+    const gap = 8;
+
+    // FACTORY BOOST. Only visible once the FTUE has unlocked it (5+ raids).
+    if (save.ftueUnlocks.factoryBoost) {
+      const fb = this.makeAdButton(x, y, btnW, btnH, this.factoryBoostLabelText(), 0xffd75a, () =>
+        this.handleFactoryBoost(),
+      );
+      this.factoryBoostBg = fb.bg;
+      this.factoryBoostLabel = fb.label;
+      this.adPanelObjects.push(fb.bg);
+      this.adPanelObjects.push(fb.label);
+      y += btnH + gap;
+      this.applyFactoryBoostVisuals();
+    } else {
+      this.factoryBoostBg = null;
+      this.factoryBoostLabel = null;
+    }
+
+    // CLEAR INFESTATION — replaces the previous M20 stub. Routes to the
+    // existing InfestationSystem.clearAllInfestation() on grant.
+    if (InfestationSystem.hasInfestation()) {
+      const ci = this.makeAdButton(x, y, btnW, btnH, Strings.infestationClearAd, 0xff416b, () =>
+        this.handleClearInfestation(),
+      );
+      this.adPanelObjects.push(ci.bg);
+      this.adPanelObjects.push(ci.label);
+      y += btnH + gap;
+    }
+
+    // DAILY CRATE — eligibility means "raided today AND not yet claimed".
+    // If already claimed, render a passive label instead so the player sees
+    // their progression (claimed → bare label, becomes button again next day).
+    if (save.tutorialDone && AdManager.isDailyCrateEligible()) {
+      const dc = this.makeAdButton(x, y, btnW, btnH, Strings.adDailyCrateButton, 0xa76cff, () =>
+        this.handleDailyCrate(),
+      );
+      this.adPanelObjects.push(dc.bg);
+      this.adPanelObjects.push(dc.label);
+      y += btnH + gap;
+    } else if (save.tutorialDone && AdManager.isDailyCrateClaimedToday()) {
+      const label = this.add
+        .text(x, y, Strings.adDailyCrateClaimed, {
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          color: '#666666',
+        })
+        .setScrollFactor(0)
+        .setDepth(2051);
+      this.adPanelObjects.push(label);
+      y += 18 + gap;
+    }
+  }
+
+  private destroyAdPanel(): void {
+    for (const o of this.adPanelObjects) o.destroy();
+    this.adPanelObjects = [];
+    this.factoryBoostBg = null;
+    this.factoryBoostLabel = null;
+  }
+
+  // Per-frame: refresh the FACTORY BOOST label so the cooldown ticks live
+  // (1-second granularity). Bails on no-button / no-elapsed-second to keep
+  // the work minimal.
+  private tickAdPanel(): void {
+    if (!this.factoryBoostLabel) return;
+    const sec = Math.floor(Date.now() / 1000);
+    if (sec === this.adPanelLastSecond) return;
+    this.adPanelLastSecond = sec;
+    this.factoryBoostLabel.setText(this.factoryBoostLabelText());
+    this.applyFactoryBoostVisuals();
+    // Rebuild the whole panel if the boost just ended (cooldown text differs
+    // from active text, and we might want to enable a queued claim).
+    if (!AdManager.isFactoryBoostActive() && this.factoryBoostBg && this.factoryBoostBg.alpha < 1) {
+      // No-op: actual rebuild only on user-action paths to avoid flicker.
+    }
+  }
+
+  private factoryBoostLabelText(): string {
+    if (AdManager.isFactoryBoostActive()) {
+      const secs = AdManager.factoryBoostCooldownRemainingSec();
+      return `${Strings.adFactoryBoostActive} ${secs}s`;
+    }
+    if (AdManager.isFactoryBoostOnCooldown()) {
+      const secs = AdManager.factoryBoostCooldownRemainingSec();
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return `${Strings.adFactoryBoostCooldown} ${m}:${s.toString().padStart(2, '0')}`;
+    }
+    return Strings.adFactoryBoostButton;
+  }
+
+  private applyFactoryBoostVisuals(): void {
+    if (!this.factoryBoostBg || !this.factoryBoostLabel) return;
+    const onCd = AdManager.isFactoryBoostOnCooldown();
+    const active = AdManager.isFactoryBoostActive();
+    if (active) {
+      this.factoryBoostBg.setFillStyle(0x72ff9f, 0.9);
+      this.factoryBoostBg.setStrokeStyle(2, 0xffffff, 0.85);
+      this.factoryBoostBg.disableInteractive();
+      this.factoryBoostLabel.setColor('#000000');
+    } else if (onCd) {
+      this.factoryBoostBg.setFillStyle(0x444444, 0.6);
+      this.factoryBoostBg.setStrokeStyle(1, 0xffffff, 0.25);
+      this.factoryBoostBg.disableInteractive();
+      this.factoryBoostLabel.setColor('#888888');
+    } else {
+      this.factoryBoostBg.setFillStyle(0xffd75a, 1);
+      this.factoryBoostBg.setStrokeStyle(2, 0xffffff, 0.9);
+      this.factoryBoostBg.setInteractive({ useHandCursor: true });
+      this.factoryBoostLabel.setColor('#000000');
+    }
+  }
+
+  // Shared button factory for the M20 ad panel. Pure visual; click handler
+  // is wired by the caller because each placement runs different logic.
+  private makeAdButton(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    text: string,
+    bgColor: number,
+    onClick: () => void,
+  ): { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text } {
     const bg = this.add
-      .rectangle(x, y, 240, 36, 0x444444, 0.55)
-      .setStrokeStyle(1, 0xffffff, 0.25)
+      .rectangle(x, y, w, h, bgColor, 1)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, 0xffffff, 0.9)
       .setScrollFactor(0)
-      .setDepth(2050);
+      .setDepth(2050)
+      .setInteractive({ useHandCursor: true });
+    bg.on('pointerover', () => bg.setFillStyle(bgColor, 0.85));
+    bg.on('pointerout', () => bg.setFillStyle(bgColor, 1));
+    bg.on('pointerdown', onClick);
     const label = this.add
-      .text(x, y, Strings.infestationClearAd, {
+      .text(x + w / 2, y + h / 2, text, {
         fontFamily: 'monospace',
-        fontSize: '12px',
-        color: '#888888',
+        fontSize: '13px',
+        color: '#000000',
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(2051);
-    this.operatorPanelObjects.push(bg);
-    this.operatorPanelObjects.push(label);
+    return { bg, label };
+  }
+
+  private async handleFactoryBoost(): Promise<void> {
+    if (AdManager.isFactoryBoostOnCooldown()) return;
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adFactoryBoostTitle,
+      description: Strings.adFactoryBoostDesc,
+    });
+    this.scene.resume();
+    if (!granted) return;
+    AdManager.activateFactoryBoost();
+    void saveSystem.persist();
+    // Regenerator drop cadence depends on SPM which depends on the boost
+    // active state. Rebuild generators so they tick at the boosted rate.
+    this.rebuildFactoryFloor();
+    this.buildAdPanel();
+  }
+
+  private async handleClearInfestation(): Promise<void> {
+    if (!InfestationSystem.hasInfestation()) return;
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adClearInfestationTitle,
+      description: Strings.adClearInfestationDesc,
+      borderColor: 0xff416b,
+    });
+    this.scene.resume();
+    if (!granted) return;
+    InfestationSystem.clearAllInfestation();
+    void saveSystem.persist();
+    this.rebuildFactoryFloor();
+    this.buildAdPanel();
+  }
+
+  private async handleDailyCrate(): Promise<void> {
+    if (!AdManager.isDailyCrateEligible()) return;
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adDailyCrateTitle,
+      description: Strings.adDailyCrateDesc,
+      borderColor: 0xa76cff,
+    });
+    this.scene.resume();
+    if (!granted) return;
+    const reward = AdManager.claimDailyCrate();
+    if (reward.kind === 'scrap') Economy.bankLoot(reward.amount, 0);
+    else Economy.bankLoot(0, reward.amount);
+    void saveSystem.persist();
+    this.showAdRewardToast(AdManager.formatDailyCrateRewardText(reward));
+    this.buildAdPanel();
+  }
+
+  private showAdRewardToast(text: string): void {
+    const toast = this.add
+      .text(this.scale.width / 2, 50, text, {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        color: '#ffd75a',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#0a1014',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2200)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: toast,
+      alpha: 1,
+      y: 70,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(3500, () => {
+      this.tweens.add({
+        targets: toast,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => toast.destroy(),
+      });
+    });
+  }
+
+  // M20 OPERATOR TRY-OUT — handler called from the operator tile's "TRY IN
+  // NEXT RAID" button. Sets save.tryOutOperator so the next raid swaps the
+  // selected operator for one run (consumed in RaidScene.finishRaid).
+  private async handleOperatorTryOut(id: OperatorId): Promise<void> {
+    const def = OperatorDefs[id];
+    if (def.locked) return; // unimplemented operators can't be tried
+    if (OperatorSystem.isUnlocked(id)) return; // already owned, no need
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adOperatorTryOutTitle,
+      description: Strings.adOperatorTryOutDesc,
+      borderColor: def.color,
+    });
+    this.scene.resume();
+    if (!granted) return;
+    OperatorSystem.setTryOut(id);
+    void saveSystem.persist();
+    this.showAdRewardToast(Strings.adTryOutToast);
+    this.buildOperatorPanel();
   }
 }
