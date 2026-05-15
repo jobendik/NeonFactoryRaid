@@ -11,7 +11,7 @@ import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { bus, Events } from '../core/EventBus';
 import { UpgradeCard } from '../ui/UpgradeCard';
-import { UPGRADE_KEYS } from '../config/UpgradeDefs';
+import { UPGRADE_KEYS, type UpgradeKey } from '../config/UpgradeDefs';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -45,6 +45,11 @@ export class FactoryScene extends Phaser.Scene {
   private drones: Drone[] = [];
   private upgradeCards: UpgradeCard[] = [];
   private milestoneVisuals: Phaser.GameObjects.GameObject[] = [];
+  // Pulsing "DEPLOY" prompt that appears the first time a post-tutorial player
+  // returns to the factory and has bought Gen Lv. 2. Cleared once they walk on
+  // the pad or once raidsCompleted advances past 1.
+  private deployPrompt: Phaser.GameObjects.Text | null = null;
+  private deployPromptTween: Phaser.Tweens.Tween | null = null;
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -90,6 +95,46 @@ export class FactoryScene extends Phaser.Scene {
     bus.on(Events.UPGRADE_PURCHASED, this.onUpgradePurchased);
 
     this.showOfflineToast();
+    this.refreshDeployPrompt();
+  }
+
+  // The §5.2 scripted moment: right after the player buys Gen Lv. 2 in their
+  // first post-tutorial factory visit, light up the deploy pad. We key this off
+  // (tutorialDone, gen>=2, raidsCompleted<=1) so it stops appearing once they're
+  // past the FTUE.
+  private refreshDeployPrompt(): void {
+    const save = saveSystem.get();
+    const want =
+      save.tutorialDone === true &&
+      save.upgrades.gen >= 2 &&
+      save.raidsCompleted <= 1;
+
+    if (want && !this.deployPrompt) {
+      this.deployPrompt = this.add
+        .text(this.padX, this.padY - this.padRadius - 24, Strings.ftueDeployPrompt, {
+          fontFamily: 'monospace',
+          fontSize: '34px',
+          color: '#72ff9f',
+          stroke: '#000000',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(3);
+      this.deployPromptTween = this.tweens.add({
+        targets: this.deployPrompt,
+        scale: { from: 1, to: 1.18 },
+        alpha: { from: 1, to: 0.7 },
+        duration: 520,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    } else if (!want && this.deployPrompt) {
+      this.deployPromptTween?.stop();
+      this.deployPromptTween = null;
+      this.deployPrompt.destroy();
+      this.deployPrompt = null;
+    }
   }
 
   override update(_time: number, deltaMs: number): void {
@@ -150,6 +195,10 @@ export class FactoryScene extends Phaser.Scene {
     this.upgradeCards = [];
     for (const v of this.milestoneVisuals) v.destroy();
     this.milestoneVisuals = [];
+    this.deployPromptTween?.stop();
+    this.deployPromptTween = null;
+    this.deployPrompt?.destroy();
+    this.deployPrompt = null;
   }
 
   // ---- accessors used by HUDScene ----
@@ -222,11 +271,38 @@ export class FactoryScene extends Phaser.Scene {
       .setDepth(2000);
     this.milestoneVisuals.push(header);
 
-    for (let i = 0; i < UPGRADE_KEYS.length; i++) {
-      const key = UPGRADE_KEYS[i];
+    // Progressive reveal per blueprint §5.3 - only render rows the FTUE has
+    // unlocked. The list is filtered before layout so visible rows stack
+    // flush, with no holes for locked tracks.
+    const visibleKeys = UPGRADE_KEYS.filter(k => this.isUpgradeUnlocked(k));
+    for (let i = 0; i < visibleKeys.length; i++) {
+      const key = visibleKeys[i];
       const card = new UpgradeCard(this, key, x + 10, startY + i * rowGap);
       card.refresh();
       this.upgradeCards.push(card);
+    }
+  }
+
+  // §5.3 reveal rules. Gen is always visible (first factory view shows only
+  // GENERATOR per the M11 spec). The rest gate on the ftueUnlocks flags set
+  // by RaidScene.finishRaid. Speed isn't called out in §5.3 - we piggyback
+  // it on the first-real-raid magnet reveal so the first factory visit is
+  // a single highlighted row, matching the tutorial brief.
+  private isUpgradeUnlocked(key: UpgradeKey): boolean {
+    const u = saveSystem.get().ftueUnlocks;
+    switch (key) {
+      case 'gen':
+        return true;
+      case 'speed':
+        return u.magnetUpgrade;
+      case 'magnet':
+        return u.magnetUpgrade;
+      case 'drone':
+        return u.droneUpgrade;
+      case 'damage':
+        return u.damageUpgrade;
+      case 'luck':
+        return u.luckUpgrade;
     }
   }
 
@@ -238,6 +314,9 @@ export class FactoryScene extends Phaser.Scene {
     // Some upgrades require live changes to the factory floor (more generators,
     // a new drone, new placeholder visuals).
     this.rebuildFactoryFloor();
+    // After Gen Lv. 2 - the scripted §5.2 first-purchase - light up the deploy
+    // pad so the player understands what to do next.
+    this.refreshDeployPrompt();
   }
 
   private rebuildFactoryFloor(): void {

@@ -32,8 +32,14 @@ export class BootScene extends Phaser.Scene {
 
     console.log(Strings.bootOk);
 
-    // Boot lands in the Factory hub - the player chooses when to deploy.
-    this.scene.start('FactoryScene');
+    // First-time boot lands directly in the FTUE tutorial raid (§5.1: "no
+    // tutorial modal at start - the game opens directly inside a playable
+    // tutorial raid"). Returning players boot into the Factory hub.
     this.scene.launch('HUDScene');
+    if (!saveSystem.get().tutorialDone) {
+      this.scene.start('RaidScene', { tutorial: true });
+    } else {
+      this.scene.start('FactoryScene');
+    }
   }
 }

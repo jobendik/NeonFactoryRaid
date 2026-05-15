@@ -25,6 +25,35 @@ export const Balance = {
     draftTimeScale: 0.1,
     draftAutoPickSec: 8,
   },
+  // FTUE / tutorial raid per blueprint §5. The tutorial raid uses these mods on
+  // top of normal balance; scripted events fire at the listed timestamps. Captions
+  // honor the §5.1 "no more than 4 words on screen" rule.
+  tutorial: {
+    playerHpMult: 2.0,
+    playerDamageMult: 2.0,
+    enemySpawnRateMult: 0.4,
+    enemyHpMult: 0.5,
+    safetyNetHpFloor: 1,
+    captionHoldSec: 2.6,
+    captionFadeMs: 320,
+    initialScrapPileCount: 3,
+    initialScrapPileOffset: 90,
+    captionTimings: [
+      { t: 0.0, key: 'move' as const },
+      { t: 6.0, key: 'dash' as const },
+      { t: 12.0, key: 'powerup' as const },
+      { t: 18.0, key: 'extract' as const },
+    ] as const,
+    droneSwarmAtSec: 10.0,
+    droneSwarmEffectSec: 12.0,
+    droneSwarmDroneCount: 3,
+    droneSwarmOrbitRadius: 70,
+    droneSwarmOrbitSpeed: 3.2,
+    magnetBurstAtSec: 25.0,
+    magnetBurstEffectSec: 6.0,
+    magnetBurstRadiusMult: 3.0,
+    powerupSpawnRadius: 220,
+  },
   player: {
     baseSpeed: 260,
     speedPerLevel: 18,

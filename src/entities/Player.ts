@@ -23,6 +23,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private hitInvulnTimer = 0;
   private facing = 0;
   private body_!: Phaser.Physics.Arcade.Body;
+  // FTUE safety net per §5.1: tutorial raid clamps HP so the player can't die.
+  // Default 0 means takeDamage behaves normally; tutorial sets it to 1.
+  private hpFloor = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Player.ensureTexture(scene);
@@ -133,10 +136,28 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.speed = UpgradeEffects.playerSpeed();
   }
 
+  // FTUE safety net: clamp the minimum HP. Tutorial sets 1 so the death path
+  // never fires. Pass 0 to disable.
+  setHpFloor(floor: number): void {
+    this.hpFloor = Math.max(0, floor);
+    if (this.hp < this.hpFloor) this.hp = this.hpFloor;
+  }
+
+  // Scales current and max HP by `mult`. Used for the tutorial's 2× HP buff -
+  // applied after construction so we don't have to thread the multiplier through
+  // every constructor.
+  applyHpMult(mult: number): void {
+    if (mult <= 0) return;
+    this.maxHp = Math.round(this.maxHp * mult);
+    this.hp = this.maxHp;
+  }
+
   // Returns the amount actually applied; 0 if invulnerable or already at 0 HP.
   takeDamage(amount: number): number {
     if (this.isInvulnerable() || this.hp <= 0) return 0;
-    const applied = Math.min(this.hp, amount);
+    const room = this.hp - this.hpFloor;
+    if (room <= 0) return 0;
+    const applied = Math.min(room, amount);
     this.hp -= applied;
     this.hitInvulnTimer = Balance.player.invulnAfterHit;
     this.scene.cameras.main.shake(Balance.ui.hitShakeDuration, Balance.ui.hitShakeIntensity);

@@ -3,6 +3,7 @@ import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { Pickup, type PickupType } from '../entities/Pickup';
 import { Bullet } from '../entities/Bullet';
+import { Drone } from '../entities/Drone';
 import { InputSystem } from '../systems/InputSystem';
 import { WaveDirector } from '../systems/WaveDirector';
 import { WeaponSystem } from '../systems/WeaponSystem';
@@ -12,13 +13,34 @@ import { GreedSystem } from '../systems/GreedSystem';
 import { Economy } from '../systems/EconomySystem';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
+import { Strings } from '../config/Strings';
 import { EnemyDefs } from '../config/EnemyDefs';
 import { bus, Events } from '../core/EventBus';
 import { playRisingChord } from '../platform/Audio';
 import { saveSystem } from '../platform/SaveSystem';
-import type { RaidEndState, RaidEndPayload } from '../core/types';
+import type {
+  RaidEndState,
+  RaidEndPayload,
+  RaidInitData,
+  WaypointTarget,
+} from '../core/types';
 
 type RaidPhase = 'active' | 'extracting' | 'ended';
+
+type TutorialCaptionKey = 'move' | 'dash' | 'powerup' | 'extract';
+
+// M11 placeholder power-ups (Drone Swarm, Magnet Burst). These exist only to
+// fulfill the §5.2 FTUE beats - PowerupSystem in M12 replaces them with proper
+// pooled entities, real definitions in PowerupDefs.ts, and full HUD timer pips.
+// TODO(M12): retire this struct and route through PowerupSystem.
+interface TutorialPowerup {
+  kind: 'droneSwarm' | 'magnetBurst';
+  x: number;
+  y: number;
+  body: Phaser.GameObjects.Graphics;
+  pulse: number;
+  collected: boolean;
+}
 
 // RaidScene drives the raid lifecycle. Through M6 it owns:
 //   - the player, enemies, pickups, bullets pools
@@ -48,12 +70,27 @@ export class RaidScene extends Phaser.Scene {
   private activePopups = 0;
   private phase: RaidPhase = 'active';
   private extractTimer = 0;
+  private isTutorial = false;
+  private elapsed = 0;
+  // FTUE tutorial state
+  private captionDoneIdx = -1;
+  private tutorialPowerups: TutorialPowerup[] = [];
+  private droneSwarmExpiresAt = -1;
+  private droneSwarmDrones: Drone[] = [];
+  private magnetBurstExpiresAt = -1;
+  private droneSwarmTriggered = false;
+  private magnetBurstTriggered = false;
+  private tutorialBanner: Phaser.GameObjects.Text | null = null;
   private onPlayerDied = (): void => this.requestEnd('failed');
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => this.greed.start();
 
   constructor() {
     super({ key: 'RaidScene' });
+  }
+
+  init(data?: RaidInitData): void {
+    this.isTutorial = !!data?.tutorial;
   }
 
   create(): void {
@@ -99,7 +136,18 @@ export class RaidScene extends Phaser.Scene {
       x: this.player.x,
       y: this.player.y,
     }));
-    this.waveDirector.start();
+    const raidDuration = this.isTutorial
+      ? Balance.raid.tutorialDuration
+      : Balance.raid.normalDuration;
+    if (this.isTutorial) {
+      this.waveDirector.start({
+        spawnRateMult: Balance.tutorial.enemySpawnRateMult,
+        enemyHpMult: Balance.tutorial.enemyHpMult,
+        raidDuration,
+      });
+    } else {
+      this.waveDirector.start({ raidDuration });
+    }
 
     this.particles = new ParticleEffects(this);
     this.weapons = new WeaponSystem(
@@ -108,13 +156,14 @@ export class RaidScene extends Phaser.Scene {
       () => this.enemies.getChildren(),
     );
     this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
+    if (this.isTutorial) this.weapons.setDamageMult(Balance.tutorial.playerDamageMult);
 
     this.extraction = new ExtractionSystem(
       this,
       Balance.extraction.padX,
       Balance.extraction.padY,
       Balance.extraction.padRadius,
-      Balance.raid.extractionOpenTime,
+      this.isTutorial ? Balance.raid.tutorialExtractionOpenTime : Balance.raid.extractionOpenTime,
     );
 
     this.greed = new GreedSystem();
@@ -123,9 +172,24 @@ export class RaidScene extends Phaser.Scene {
     this.runLoot.cores = 0;
     this.combo = 1.0;
     this.comboGrace = 0;
-    this.timeRemaining = Balance.raid.normalDuration;
+    this.timeRemaining = raidDuration;
     this.phase = 'active';
     this.extractTimer = 0;
+    this.elapsed = 0;
+    this.captionDoneIdx = -1;
+    this.tutorialPowerups = [];
+    this.droneSwarmExpiresAt = -1;
+    this.magnetBurstExpiresAt = -1;
+    this.droneSwarmTriggered = false;
+    this.magnetBurstTriggered = false;
+    this.droneSwarmDrones = [];
+
+    if (this.isTutorial) {
+      this.player.applyHpMult(Balance.tutorial.playerHpMult);
+      this.player.setHpFloor(Balance.tutorial.safetyNetHpFloor);
+      this.spawnInitialScrapPile();
+      this.spawnTutorialBanner();
+    }
 
     bus.on(Events.PLAYER_DIED, this.onPlayerDied);
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
@@ -145,12 +209,15 @@ export class RaidScene extends Phaser.Scene {
     }
 
     this.timeRemaining = Math.max(0, this.timeRemaining - dt);
+    this.elapsed += dt;
 
     const frame = this.inputSystem.getInput();
     this.player.update(dt, frame);
     this.waveDirector.update(dt);
     this.extraction.update(dt, this.player.x, this.player.y);
     this.greed.update(dt);
+
+    if (this.isTutorial) this.tickTutorial(dt);
 
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
@@ -174,10 +241,26 @@ export class RaidScene extends Phaser.Scene {
       }
     }
 
-    const magnetRadius = UpgradeEffects.magnetRadius();
+    // Magnet Burst placeholder: temporarily multiplies the magnet radius.
+    let magnetRadius = UpgradeEffects.magnetRadius();
+    if (this.magnetBurstExpiresAt > 0 && this.elapsed < this.magnetBurstExpiresAt) {
+      magnetRadius *= Balance.tutorial.magnetBurstRadiusMult;
+    } else if (this.magnetBurstExpiresAt > 0 && this.elapsed >= this.magnetBurstExpiresAt) {
+      this.magnetBurstExpiresAt = -1;
+    }
     for (const child of this.pickups.getChildren()) {
       const p = child as Pickup;
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
+    }
+
+    // Drone Swarm placeholder: visual orbiting drones for the effect window.
+    if (this.droneSwarmDrones.length > 0) {
+      for (const d of this.droneSwarmDrones) d.update(dt, this.player.x, this.player.y);
+      if (this.droneSwarmExpiresAt > 0 && this.elapsed >= this.droneSwarmExpiresAt) {
+        for (const d of this.droneSwarmDrones) d.destroy();
+        this.droneSwarmDrones = [];
+        this.droneSwarmExpiresAt = -1;
+      }
     }
 
     this.tickBullets(dt);
@@ -197,6 +280,14 @@ export class RaidScene extends Phaser.Scene {
     this.particles.destroy();
     this.extraction.destroy();
     this.greed.stop();
+    for (const d of this.droneSwarmDrones) d.destroy();
+    this.droneSwarmDrones = [];
+    for (const tp of this.tutorialPowerups) tp.body.destroy();
+    this.tutorialPowerups = [];
+    if (this.tutorialBanner) {
+      this.tutorialBanner.destroy();
+      this.tutorialBanner = null;
+    }
     bus.emit(Events.RAID_ENDED);
   }
 
@@ -252,6 +343,13 @@ export class RaidScene extends Phaser.Scene {
         `+${value}`,
         type === 'scrap' ? '#22f6ff' : '#ffd75a',
       );
+    }
+    if (type === 'core') {
+      const save = saveSystem.get();
+      if (!save.firstCoreCollected) {
+        save.firstCoreCollected = true;
+        save.ftueUnlocks.luckUpgrade = true;
+      }
     }
     p.kill();
     bus.emit(Events.PICKUP_COLLECTED, type, value);
@@ -451,6 +549,14 @@ export class RaidScene extends Phaser.Scene {
     }
 
     Economy.bankLoot(scrap, cores);
+    if (cores > 0) {
+      const save = saveSystem.get();
+      if (!save.firstCoreCollected) {
+        save.firstCoreCollected = true;
+        save.ftueUnlocks.luckUpgrade = true;
+      }
+    }
+    this.updateFtueProgress(state);
     // Persist immediately on raid-end so the player can't lose loot to a tab
     // close on the summary screen. The 10s autosave and the RAID_ENDED handler
     // both still fire later; this is the belt-and-suspenders save.
@@ -461,6 +567,7 @@ export class RaidScene extends Phaser.Scene {
       loot: { scrap, cores },
       greedMult,
       penaltyApplied,
+      tutorial: this.isTutorial,
     };
 
     // Small delay so the moment's tail visuals finish before the summary appears.
@@ -468,6 +575,227 @@ export class RaidScene extends Phaser.Scene {
       this.scene.launch('SummaryScene', payload);
       this.scene.pause();
     });
+  }
+
+  // Centralizes the §5.3 progressive-reveal rules. Called once per raid-end,
+  // before the SummaryScene reads the save. The §5.3 table puts a few unlocks
+  // on the "X raids completed" axis; raidsCompleted counts the tutorial as
+  // raid #1, so the magnet/drone/damage gates compare against >=2/>=3/>=4.
+  private updateFtueProgress(state: RaidEndState): void {
+    const save = saveSystem.get();
+    save.raidsCompleted += 1;
+    if (state === 'extracted') save.successfulExtracts += 1;
+
+    if (this.isTutorial && state === 'extracted') {
+      save.tutorialDone = true;
+      save.ftueUnlocks.dailyClaim = true;
+    }
+
+    // Real-raid count (post-tutorial). Reveal milestones key off this number,
+    // not raidsCompleted, so a player who never finished the tutorial doesn't
+    // accidentally unlock real-raid gates by failing it.
+    const realRaids = save.tutorialDone ? Math.max(0, save.raidsCompleted - 1) : 0;
+    if (realRaids >= 1) save.ftueUnlocks.magnetUpgrade = true;
+    if (realRaids >= 2) save.ftueUnlocks.droneUpgrade = true;
+    if (realRaids >= 3) save.ftueUnlocks.damageUpgrade = true;
+    if (realRaids >= 5) save.ftueUnlocks.factoryBoost = true;
+  }
+
+  // ---- tutorial-only helpers ----
+
+  // Tutorial loop: schedule captions, scripted power-up spawns, and detect
+  // overlap with the placeholder power-ups (since they're Graphics objects,
+  // not physics sprites, the overlap check is manual).
+  private tickTutorial(dt: number): void {
+    void dt;
+    // Captions
+    const timings = Balance.tutorial.captionTimings;
+    for (let i = this.captionDoneIdx + 1; i < timings.length; i++) {
+      if (this.elapsed >= timings[i].t) {
+        this.captionDoneIdx = i;
+        this.showTutorialCaption(timings[i].key);
+      } else break;
+    }
+
+    // Scripted power-up spawns. Each spawns once when its timestamp is crossed.
+    if (!this.droneSwarmTriggered && this.elapsed >= Balance.tutorial.droneSwarmAtSec) {
+      this.droneSwarmTriggered = true;
+      this.spawnTutorialPowerup('droneSwarm');
+    }
+    if (!this.magnetBurstTriggered && this.elapsed >= Balance.tutorial.magnetBurstAtSec) {
+      this.magnetBurstTriggered = true;
+      this.spawnTutorialPowerup('magnetBurst');
+    }
+
+    // Manual overlap + pulse for each active tutorial power-up.
+    for (const tp of this.tutorialPowerups) {
+      if (tp.collected) continue;
+      tp.pulse += 0.12;
+      this.drawTutorialPowerup(tp);
+      const dx = this.player.x - tp.x;
+      const dy = this.player.y - tp.y;
+      if (Math.hypot(dx, dy) <= 28) this.collectTutorialPowerup(tp);
+    }
+    // Drop collected entries.
+    this.tutorialPowerups = this.tutorialPowerups.filter(tp => !tp.collected);
+  }
+
+  private showTutorialCaption(key: TutorialCaptionKey): void {
+    const text =
+      key === 'move'
+        ? Strings.ftueMove
+        : key === 'dash'
+          ? Strings.ftueDash
+          : key === 'powerup'
+            ? Strings.ftuePowerup
+            : Strings.ftueExtract;
+    const t = this.add.text(this.scale.width / 2, 220, text, {
+      fontFamily: 'monospace',
+      fontSize: '64px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 6,
+    });
+    t.setOrigin(0.5).setScrollFactor(0).setDepth(2200).setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      duration: Balance.tutorial.captionFadeMs,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(Balance.tutorial.captionHoldSec * 1000, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: Balance.tutorial.captionFadeMs,
+        onComplete: () => t.destroy(),
+      });
+    });
+  }
+
+  private spawnTutorialBanner(): void {
+    const banner = this.add.text(this.scale.width / 2, 6, Strings.ftueTutorialBanner, {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#888888',
+      stroke: '#000000',
+      strokeThickness: 2,
+    });
+    banner.setOrigin(0.5, 0).setScrollFactor(0).setDepth(2050);
+    this.tutorialBanner = banner;
+  }
+
+  private spawnInitialScrapPile(): void {
+    // §5.2 0.0s: "Big arrow points to nearby scrap pile" - we spawn a small
+    // visible cluster right next to the player so the player picks it up within
+    // the first 2 seconds without needing to chase.
+    const offset = Balance.tutorial.initialScrapPileOffset;
+    for (let i = 0; i < Balance.tutorial.initialScrapPileCount; i++) {
+      const angle = (i / Balance.tutorial.initialScrapPileCount) * Math.PI * 2;
+      const x = this.player.x + Math.cos(angle) * offset;
+      const y = this.player.y + Math.sin(angle) * offset;
+      const p = this.pickups.get(x, y) as Pickup | null;
+      if (p) p.spawn(x, y, 'scrap', 1);
+    }
+  }
+
+  // Placeholder power-up - field-spawned pentagon ring that grants the named
+  // effect on contact. M12 replaces this with the real PowerupSystem.
+  // TODO(M12): retire spawn/draw/collect; route through PowerupSystem instead.
+  private spawnTutorialPowerup(kind: 'droneSwarm' | 'magnetBurst'): void {
+    const angle = Math.random() * Math.PI * 2;
+    const r = Balance.tutorial.powerupSpawnRadius;
+    const x = Phaser.Math.Clamp(
+      this.player.x + Math.cos(angle) * r,
+      Balance.player.worldBounds.minX + 60,
+      Balance.player.worldBounds.maxX - 60,
+    );
+    const y = Phaser.Math.Clamp(
+      this.player.y + Math.sin(angle) * r,
+      Balance.player.worldBounds.minY + 60,
+      Balance.player.worldBounds.maxY - 60,
+    );
+    const body = this.add.graphics();
+    body.setDepth(40);
+    const tp: TutorialPowerup = { kind, x, y, body, pulse: 0, collected: false };
+    this.tutorialPowerups.push(tp);
+    this.drawTutorialPowerup(tp);
+  }
+
+  private drawTutorialPowerup(tp: TutorialPowerup): void {
+    const color = tp.kind === 'droneSwarm' ? Balance.colors.player : Balance.colors.reward;
+    const r = 18 + Math.sin(tp.pulse) * 3;
+    tp.body.clear();
+    tp.body.lineStyle(3, color, 0.95);
+    tp.body.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
+      const px = tp.x + Math.cos(a) * r;
+      const py = tp.y + Math.sin(a) * r;
+      if (i === 0) tp.body.moveTo(px, py);
+      else tp.body.lineTo(px, py);
+    }
+    tp.body.closePath();
+    tp.body.strokePath();
+    tp.body.lineStyle(1, color, 0.4);
+    tp.body.strokeCircle(tp.x, tp.y, r + 6);
+  }
+
+  private collectTutorialPowerup(tp: TutorialPowerup): void {
+    tp.collected = true;
+    tp.body.destroy();
+    const label = tp.kind === 'droneSwarm' ? Strings.powerupDroneSwarm : Strings.powerupMagnetBurst;
+    this.showPopup(tp.x, tp.y - 16, label, '#ffd75a');
+    if (tp.kind === 'droneSwarm') this.activateDroneSwarm();
+    else this.activateMagnetBurst();
+  }
+
+  private activateDroneSwarm(): void {
+    // Already running? Refresh the timer instead of stacking drones.
+    if (this.droneSwarmDrones.length > 0) {
+      this.droneSwarmExpiresAt = this.elapsed + Balance.tutorial.droneSwarmEffectSec;
+      return;
+    }
+    const count = Balance.tutorial.droneSwarmDroneCount;
+    for (let i = 0; i < count; i++) {
+      const baseAngle = (i / count) * Math.PI * 2;
+      this.droneSwarmDrones.push(
+        new Drone(this, {
+          orbitRadius: Balance.tutorial.droneSwarmOrbitRadius,
+          orbitSpeed: Balance.tutorial.droneSwarmOrbitSpeed,
+          baseAngle,
+          pickupRadius: 130,
+          withTrail: true,
+        }),
+      );
+    }
+    this.droneSwarmExpiresAt = this.elapsed + Balance.tutorial.droneSwarmEffectSec;
+  }
+
+  private activateMagnetBurst(): void {
+    this.magnetBurstExpiresAt = this.elapsed + Balance.tutorial.magnetBurstEffectSec;
+  }
+
+  // ---- waypoint target (consumed by HUDScene) ----
+
+  // Priority order: an open extraction pad always wins. Before extraction
+  // opens, the tutorial directs the off-screen arrow at the live placeholder
+  // power-up (if any). Non-tutorial raids return null until extraction opens.
+  getWaypointTarget(): WaypointTarget | null {
+    if (this.extraction.isOpen()) {
+      const pos = this.extraction.getPadPosition();
+      return { x: pos.x, y: pos.y, kind: 'extract' };
+    }
+    if (this.isTutorial) {
+      for (const tp of this.tutorialPowerups) {
+        if (!tp.collected) return { x: tp.x, y: tp.y, kind: 'powerup' };
+      }
+    }
+    return null;
+  }
+
+  isTutorialRaid(): boolean {
+    return this.isTutorial;
   }
 
   private spawnRadialFlash(): void {

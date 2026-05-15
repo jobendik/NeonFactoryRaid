@@ -254,9 +254,17 @@ export class HUDScene extends Phaser.Scene {
     const ext = raid.getExtractionInfo();
     if (ext.open) {
       this.extractBanner.setText(Strings.extractionOpened);
-      this.drawWaypoint(raid, ext.padX, ext.padY);
     } else {
       this.extractBanner.setText('');
+    }
+
+    // Off-screen waypoint per §7.8 - target is owned by RaidScene so the FTUE
+    // tutorial can swap it between an active power-up and the extraction pad.
+    const wp = raid.getWaypointTarget();
+    if (wp) {
+      const color = wp.kind === 'powerup' ? Balance.colors.reward : Balance.colors.extraction;
+      this.drawWaypoint(raid, wp.x, wp.y, color);
+    } else {
       this.waypoint.setVisible(false);
     }
   }
@@ -307,7 +315,7 @@ export class HUDScene extends Phaser.Scene {
     if (this.deployText) this.deployText.setVisible(false);
   }
 
-  private drawWaypoint(raid: RaidScene, padX: number, padY: number): void {
+  private drawWaypoint(raid: RaidScene, padX: number, padY: number, color: number = Balance.colors.extraction): void {
     const cam = raid.cameras.main;
     const viewW = this.scale.width;
     const viewH = this.scale.height;
@@ -350,7 +358,7 @@ export class HUDScene extends Phaser.Scene {
     ];
     this.waypoint.clear();
     this.waypoint.setVisible(true);
-    this.waypoint.fillStyle(Balance.colors.extraction, 1);
+    this.waypoint.fillStyle(color, 1);
     this.waypoint.lineStyle(2, 0xffffff, 0.9);
     this.waypoint.beginPath();
     for (let i = 0; i < localPts.length; i++) {

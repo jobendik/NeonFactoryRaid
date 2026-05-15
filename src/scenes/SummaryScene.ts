@@ -29,6 +29,7 @@ export class SummaryScene extends Phaser.Scene {
   private loot = { scrap: 0, cores: 0 };
   private greedMult = 1.0;
   private penaltyApplied = false;
+  private tutorial = false;
 
   constructor() {
     super({ key: 'SummaryScene' });
@@ -40,6 +41,7 @@ export class SummaryScene extends Phaser.Scene {
       this.loot = { scrap: data.loot.scrap, cores: data.loot.cores };
       this.greedMult = data.greedMult ?? 1.0;
       this.penaltyApplied = !!data.penaltyApplied;
+      this.tutorial = !!data.tutorial;
     }
   }
 
@@ -125,8 +127,17 @@ export class SummaryScene extends Phaser.Scene {
       })
       .setOrigin(1, 0.5);
 
-    // Buttons row
+    // Buttons row. The FTUE tutorial summary collapses to the single "UPGRADE"
+    // button per §5.2: the player goes straight back to the factory, no
+    // redeploy/double-loot options surfaced until the real first raid.
     const buttonY = h * 0.72;
+    if (this.tutorial) {
+      this.makeButton(w / 2, buttonY, Strings.summaryUpgrade, 0x22f6ff, '#000000', true, () =>
+        this.gotoFactory(),
+      );
+      return;
+    }
+
     const allowDoubleLoot = false; // M20
 
     this.makeButton(

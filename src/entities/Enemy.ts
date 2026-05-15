@@ -38,11 +38,12 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.body_.enable = false;
   }
 
-  spawn(x: number, y: number, kind: EnemyKind): void {
+  spawn(x: number, y: number, kind: EnemyKind, hpMult: number = 1): void {
     this.kind = kind;
     const spec = EnemyDefs[kind];
-    this.hp = spec.hp;
-    this.maxHp = spec.hp;
+    const hp = Math.max(1, Math.round(spec.hp * hpMult));
+    this.hp = hp;
+    this.maxHp = hp;
     this.speed = spec.speed;
     this.setTexture(spec.textureKey);
     this.setPosition(x, y);

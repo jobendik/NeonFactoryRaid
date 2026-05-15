@@ -28,6 +28,7 @@ export class WeaponSystem {
   private getEnemies: EnemyListProvider;
   private fireTimer = 0;
   private damageLevel = 0;
+  private damageMult = 1;
 
   constructor(scene: Phaser.Scene, getPlayer: PlayerPositionProvider, getEnemies: EnemyListProvider) {
     this.scene = scene;
@@ -39,6 +40,11 @@ export class WeaponSystem {
     this.damageLevel = level;
   }
 
+  // Multiplier on top of the leveled damage. Tutorial sets 2.0 per §5.4.
+  setDamageMult(mult: number): void {
+    this.damageMult = Math.max(0.1, mult);
+  }
+
   update(dt: number): WeaponHit | null {
     this.fireTimer = Math.max(0, this.fireTimer - dt);
     if (this.fireTimer > 0) return null;
@@ -46,7 +52,7 @@ export class WeaponSystem {
     const target = this.findNearestInRange();
     if (!target) return null;
 
-    const damage = Balance.weapon.baseDamage + this.damageLevel * Balance.weapon.damagePerLevel;
+    const damage = (Balance.weapon.baseDamage + this.damageLevel * Balance.weapon.damagePerLevel) * this.damageMult;
     this.fireTracer(target.x, target.y);
     this.fireTimer = Balance.weapon.baseFireCooldown;
     return { target, damage };

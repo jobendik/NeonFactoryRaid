@@ -25,6 +25,17 @@ export const Strings = {
   factoryDeploy: 'DEPLOY',
   factorySpm: 'SPM',
   factoryDeployHint: 'STAND ON PAD TO DEPLOY',
+  // FTUE captions per blueprint §5.2 - max 4 words each.
+  ftueMove: 'MOVE',
+  ftueDash: 'DASH',
+  ftuePowerup: 'POWER UP!',
+  ftueExtract: 'EXTRACT',
+  ftueTutorialBanner: 'TUTORIAL',
+  ftueDeployPrompt: 'DEPLOY',
+  powerupDroneSwarm: 'DRONE SWARM',
+  powerupMagnetBurst: 'MAGNET BURST',
+  // Tutorial summary single-button label per §5.2 ("Single button: UPGRADE").
+  summaryUpgrade: 'UPGRADE',
 } as const;
 
 export type StringKey = keyof typeof Strings;

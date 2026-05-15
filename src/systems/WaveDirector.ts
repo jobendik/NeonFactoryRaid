@@ -14,22 +14,40 @@ export interface PlayerPositionProvider {
   (): { x: number; y: number };
 }
 
+export interface WaveDirectorOpts {
+  // Scales both the simultaneous-cap and the spawn cadence. Tutorial passes 0.4
+  // per blueprint §5.4 ("enemy count: 40% normal").
+  spawnRateMult?: number;
+  // Multiplier applied to each enemy's hp on spawn. Tutorial passes 0.5.
+  enemyHpMult?: number;
+  // The reference duration for the intensity ramp. Tutorial passes 45 so
+  // intensity reaches 1.0 at the end of a 45s tutorial instead of pretending
+  // the raid is 75s long.
+  raidDuration?: number;
+}
+
 export class WaveDirector {
   private group: Phaser.GameObjects.Group;
   private getPlayerPos: PlayerPositionProvider;
   private spawnTimer = 0;
   private elapsed = 0;
   private active = false;
+  private spawnRateMult = 1;
+  private enemyHpMult = 1;
+  private raidDuration: number = Balance.raid.normalDuration;
 
   constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider) {
     this.group = group;
     this.getPlayerPos = getPlayerPos;
   }
 
-  start(): void {
+  start(opts?: WaveDirectorOpts): void {
     this.active = true;
     this.elapsed = 0;
     this.spawnTimer = 0;
+    this.spawnRateMult = Math.max(0.05, opts?.spawnRateMult ?? 1);
+    this.enemyHpMult = Math.max(0.1, opts?.enemyHpMult ?? 1);
+    this.raidDuration = Math.max(1, opts?.raidDuration ?? Balance.raid.normalDuration);
   }
 
   stop(): void {
@@ -41,18 +59,21 @@ export class WaveDirector {
     this.elapsed += dt;
     this.spawnTimer -= dt;
 
-    const intensity = Math.min(1, this.elapsed / Balance.raid.normalDuration);
-    const cap = Math.min(Balance.enemies.maxOnScreen, 7 + Math.floor(intensity * 25));
+    const intensity = Math.min(1, this.elapsed / this.raidDuration);
+    const rawCap = 7 + Math.floor(intensity * 25);
+    const cap = Math.min(Balance.enemies.maxOnScreen, Math.max(1, Math.floor(rawCap * this.spawnRateMult)));
 
     if (this.spawnTimer > 0) return;
     if (this.countActive() >= cap) return;
 
     this.spawnOne();
-    this.spawnTimer = Phaser.Math.Linear(
+    // Lower spawn rate stretches the cooldown so total throughput scales with the multiplier.
+    const baseCooldown = Phaser.Math.Linear(
       Balance.enemies.spawnCooldownStart,
       Balance.enemies.spawnCooldownEnd,
       intensity,
     );
+    this.spawnTimer = baseCooldown / this.spawnRateMult;
   }
 
   private pickKind(): EnemyKind {
@@ -83,7 +104,7 @@ export class WaveDirector {
 
     const enemy = this.group.get(x, y) as Enemy | null;
     if (!enemy) return;
-    enemy.spawn(x, y, this.pickKind());
+    enemy.spawn(x, y, this.pickKind(), this.enemyHpMult);
   }
 
   private countActive(): number {
