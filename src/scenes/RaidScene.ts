@@ -3,6 +3,8 @@ import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { InputSystem } from '../systems/InputSystem';
 import { WaveDirector } from '../systems/WaveDirector';
+import { WeaponSystem } from '../systems/WeaponSystem';
+import { ParticleEffects } from '../systems/ParticleEffects';
 import { Balance } from '../config/Balance';
 import { bus, Events } from '../core/EventBus';
 
@@ -13,6 +15,8 @@ export class RaidScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
   private enemies!: Phaser.GameObjects.Group;
   private waveDirector!: WaveDirector;
+  private weapons!: WeaponSystem;
+  private particles!: ParticleEffects;
 
   constructor() {
     super({ key: 'RaidScene' });
@@ -50,6 +54,13 @@ export class RaidScene extends Phaser.Scene {
     }));
     this.waveDirector.start();
 
+    this.particles = new ParticleEffects(this);
+    this.weapons = new WeaponSystem(
+      this,
+      () => ({ x: this.player.x, y: this.player.y }),
+      () => this.enemies.getChildren(),
+    );
+
     bus.emit(Events.RAID_STARTED);
   }
 
@@ -62,11 +73,23 @@ export class RaidScene extends Phaser.Scene {
       const e = child as Enemy;
       if (e.active) e.chase(this.player.x, this.player.y);
     }
+
+    const hit = this.weapons.update(dt);
+    if (hit) {
+      const killed = hit.target.hit(hit.damage);
+      if (killed) {
+        this.particles.enemyDeath(hit.target.kind, hit.target.x, hit.target.y);
+        const dead = hit.target;
+        dead.kill();
+        bus.emit(Events.ENEMY_KILLED, dead);
+      }
+    }
   }
 
   shutdown(): void {
     this.waveDirector.stop();
     this.inputSystem.destroy();
+    this.particles.destroy();
     bus.emit(Events.RAID_ENDED);
   }
 

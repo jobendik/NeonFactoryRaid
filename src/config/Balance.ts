@@ -145,11 +145,8 @@ export const Balance = {
     danger: 0xff416b,
     reward: 0xffd75a,
   },
-  fireStub: {
-    // M1 ONLY: auto-fire stub direction so tracers are visible.
-    // Replaced by auto-aim in Milestone 3.
-    targetOffsetX: 320,
-    targetOffsetY: 0,
+  particles: {
+    enemyDeathCount: 10,
   },
 } as const;
 

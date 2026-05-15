@@ -42,6 +42,17 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setActive(false).setVisible(false);
   }
 
+  hit(amount: number): boolean {
+    this.hp -= amount;
+    // Quick alpha pulse for hit feedback. Avoids creating per-hit tweens
+    // that pile up if multiple hits land within a frame.
+    this.setAlpha(0.55);
+    this.scene.time.delayedCall(60, () => {
+      if (this.active) this.setAlpha(1);
+    });
+    return this.hp <= 0;
+  }
+
   chase(playerX: number, playerY: number): void {
     if (!this.active) return;
     const dx = playerX - this.x;

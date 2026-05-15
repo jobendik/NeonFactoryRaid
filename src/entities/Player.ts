@@ -16,7 +16,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   private dashCooldownTimer = 0;
   private invulnTimer = 0;
   private facing = 0;
-  private fireTimer = 0;
   private body_!: Phaser.Physics.Arcade.Body;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
@@ -78,15 +77,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       this.facing = Math.atan2(this.vy, this.vx);
     }
     this.setRotation(this.facing);
-
-    // M1 stub: fire visible tracers toward a fixed offset so weapon cadence is observable.
-    this.fireTimer = Math.max(0, this.fireTimer - dt);
-    if (this.fireTimer <= 0) {
-      const tx = this.x + Balance.fireStub.targetOffsetX;
-      const ty = this.y + Balance.fireStub.targetOffsetY;
-      this.fireTracer(tx, ty);
-      this.fireTimer = Balance.weapon.baseFireCooldown;
-    }
   }
 
   private startDash(input: PlayerInput): void {
@@ -101,18 +91,6 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setTint(Balance.colors.playerDashAccent);
     this.scene.time.delayedCall(Balance.player.dashDuration * 1000, () => this.clearTint());
     this.scene.cameras.main.shake(Balance.ui.dashShakeDuration, Balance.ui.dashShakeIntensity);
-  }
-
-  private fireTracer(tx: number, ty: number): void {
-    const g = this.scene.add.graphics();
-    g.lineStyle(2, Balance.colors.bulletTracer, 1);
-    g.lineBetween(this.x, this.y, tx, ty);
-    this.scene.tweens.add({
-      targets: g,
-      alpha: 0,
-      duration: Balance.ui.tracerFadeMs,
-      onComplete: () => g.destroy(),
-    });
   }
 
   isDashing(): boolean {
