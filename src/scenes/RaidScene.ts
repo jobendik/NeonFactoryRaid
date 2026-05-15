@@ -24,6 +24,7 @@ import { DraftSystem } from '../systems/DraftSystem';
 import { createDefaultRunMods, type RunMods } from '../systems/RunMods';
 import { OperatorSystem } from '../systems/OperatorSystem';
 import { InfestationSystem } from '../systems/InfestationSystem';
+import { DailyQuestSystem } from '../systems/DailyQuestSystem';
 import type { CardDef } from '../config/CardDefs';
 import type { DraftSceneInit } from './DraftScene';
 import { Rng } from '../core/Rng';
@@ -450,6 +451,7 @@ export class RaidScene extends Phaser.Scene {
     this.tickAdaptiveMusic();
     this.tickNearMiss();
     this.tickOperatorOrbs(dt);
+    DailyQuestSystem.tickRaidElapsed(this.elapsed);
 
     if (this.timeRemaining <= 0) {
       this.requestEnd('collapsed');

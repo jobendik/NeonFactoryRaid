@@ -17,6 +17,8 @@ import { sfxScrap, sfxCore, sfxUpgradePurchased, sfxGeneratorProduce } from '../
 import { OperatorDefs, OPERATOR_ORDER, type OperatorId } from '../config/OperatorDefs';
 import { OperatorSystem } from '../systems/OperatorSystem';
 import { InfestationSystem } from '../systems/InfestationSystem';
+import { DailyQuestSystem } from '../systems/DailyQuestSystem';
+import { StreakSystem } from '../systems/StreakSystem';
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -58,6 +60,8 @@ export class FactoryScene extends Phaser.Scene {
   // M16 operator picker: rendered to the left of the deploy pad. Each entry
   // owns its own Phaser game objects so we can refresh state on click.
   private operatorPanelObjects: Phaser.GameObjects.GameObject[] = [];
+  // M18 — quest panel handles, rebuilt on claim or raid-return.
+  private questPanelObjects: Phaser.GameObjects.GameObject[] = [];
   private onUpgradePurchased = (..._args: unknown[]): void => this.handleUpgradePurchased();
 
   constructor() {
@@ -108,6 +112,7 @@ export class FactoryScene extends Phaser.Scene {
     this.maybeShowInfestationToast();
     this.maybeShowInfestationTutorialModal();
     this.buildClearInfestationStub();
+    this.buildQuestPanel();
     MusicEngine.startFactory();
   }
 
@@ -217,6 +222,7 @@ export class FactoryScene extends Phaser.Scene {
     this.deployPrompt?.destroy();
     this.deployPrompt = null;
     this.destroyOperatorPanel();
+    this.destroyQuestPanel();
   }
 
   // ---- accessors used by HUDScene ----
@@ -814,6 +820,148 @@ export class FactoryScene extends Phaser.Scene {
       for (const o of layer) o.destroy();
     };
     btn.on('pointerdown', dismiss);
+  }
+
+  // §16.1 daily quest + §16.2 streak panel. Pinned to the right side of
+  // the viewport beneath the upgrade panel. Shows the current quest text +
+  // progress + claim button + streak counter. Gated by ftueUnlocks.dailyClaim
+  // (set by the FTUE on tutorial extract).
+  private buildQuestPanel(): void {
+    this.destroyQuestPanel();
+    const save = saveSystem.get();
+    if (!save.ftueUnlocks.dailyClaim) return;
+    // Per spec: "panel only appears after tutorial done + first real raid".
+    // raidsCompleted counts the tutorial as 1, so >=2 means at least one
+    // real raid has finished.
+    if (save.raidsCompleted < 2) return;
+
+    DailyQuestSystem.ensureTodaysQuest();
+    const cur = DailyQuestSystem.getCurrent();
+
+    // Bottom-left placement avoids the right-side upgrade panel and the
+    // bottom-center operator picker. The "right side panel beneath upgrades"
+    // wording from spec didn't fit when six upgrade rows reach near the
+    // bottom of the viewport, so we move to the symmetric corner.
+    const panelW = 320;
+    const panelH = 96;
+    const x = 12;
+    const startY = this.scale.height - panelH - 20;
+
+    const header = this.add
+      .text(x + 4, startY - 18, Strings.questPanelTitle, {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#22f6ff',
+      })
+      .setScrollFactor(0)
+      .setDepth(2000);
+    this.questPanelObjects.push(header);
+
+    const cardBg = this.add
+      .rectangle(x, startY, panelW, panelH, 0x0a1014, 0.92)
+      .setOrigin(0, 0)
+      .setStrokeStyle(2, 0x22f6ff, 0.5)
+      .setScrollFactor(0)
+      .setDepth(2000);
+    this.questPanelObjects.push(cardBg);
+
+    if (!cur) {
+      const txt = this.add
+        .text(x + 12, startY + 14, '— claimed today —', {
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          color: '#88a0a8',
+        })
+        .setScrollFactor(0)
+        .setDepth(2001);
+      this.questPanelObjects.push(txt);
+    } else {
+      const questText = this.add
+        .text(x + 12, startY + 10, cur.def.text, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#ffffff',
+          wordWrap: { width: panelW - 24 },
+        })
+        .setScrollFactor(0)
+        .setDepth(2001);
+      this.questPanelObjects.push(questText);
+
+      const progressText = this.add
+        .text(x + 12, startY + 46, `${cur.progress}${Strings.questProgressMid}${cur.def.threshold}`, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: cur.completed ? '#72ff9f' : '#22f6ff',
+        })
+        .setScrollFactor(0)
+        .setDepth(2001);
+      this.questPanelObjects.push(progressText);
+
+      if (cur.completed) {
+        const btn = this.add
+          .rectangle(x + panelW - 78, startY + 52, 130, 28, 0x72ff9f, 1)
+          .setStrokeStyle(2, 0xffffff, 0.9)
+          .setScrollFactor(0)
+          .setDepth(2002)
+          .setInteractive({ useHandCursor: true });
+        this.questPanelObjects.push(btn);
+        const btnLabel = this.add
+          .text(x + panelW - 78, startY + 52, Strings.questClaimReady, {
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            color: '#000000',
+          })
+          .setOrigin(0.5)
+          .setScrollFactor(0)
+          .setDepth(2003);
+        this.questPanelObjects.push(btnLabel);
+        btn.on('pointerdown', () => this.handleQuestClaim());
+      }
+    }
+
+    const streakDay = StreakSystem.getDay();
+    const streakText = this.add
+      .text(x + 12, startY + 70, `${Strings.streakLabel}${streakDay}`, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffd75a',
+      })
+      .setScrollFactor(0)
+      .setDepth(2001);
+    this.questPanelObjects.push(streakText);
+  }
+
+  private handleQuestClaim(): void {
+    const result = DailyQuestSystem.claim();
+    if (!result.ok) return;
+    sfxCore();
+    void saveSystem.persist();
+    // Toast the headline reward; the streak's own day-tier bonus is paid
+    // silently into the wallet (visible via the Scrap/Cores HUD).
+    const toast = this.add
+      .text(this.scale.width / 2, 60, Strings.questRewardToast, {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#ffd75a',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#0a1014',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2200)
+      .setAlpha(0);
+    this.tweens.add({ targets: toast, alpha: 1, y: 80, duration: 320, ease: 'Cubic.easeOut' });
+    this.time.delayedCall(3000, () => {
+      this.tweens.add({ targets: toast, alpha: 0, duration: 500, onComplete: () => toast.destroy() });
+    });
+    this.buildQuestPanel();
+  }
+
+  private destroyQuestPanel(): void {
+    for (const o of this.questPanelObjects) o.destroy();
+    this.questPanelObjects = [];
   }
 
   // [M20] stub button — disabled but visible so the player understands a

@@ -6,7 +6,7 @@ import { SDKBridge } from './SDKBridge';
 import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 const SAVE_KEY = 'save';
 
 export interface SaveStats {
@@ -18,10 +18,17 @@ export interface SaveStats {
 }
 
 export interface SaveDaily {
+  // YYYY-MM-DD UTC. New quest at midnight UTC; lastClaim tracks the date
+  // the player most recently claimed a daily quest.
   lastClaim: string;
-  streak: number;
+  // Current quest id (empty string when no active quest).
   questId: string;
   questProgress: number;
+  questCompleted: boolean;
+  // Streak: advances by 1 on quest claim. Forgives 1 missed day (skip-day
+  // rule). lastStreakDate tracks the YYYY-MM-DD the streak last advanced.
+  streakDay: number;
+  lastStreakDate: string;
 }
 
 export interface SaveSeason {
@@ -59,6 +66,9 @@ export interface SaveData {
   // (per Run C clarification #3). Only mid-game text modal in the build.
   infestationTutorialSeen: boolean;
   stats: SaveStats;
+  // M18 — cosmetic shards earned from daily quest claims. The actual
+  // cosmetic system lands post-launch; this is just a counter for now.
+  cosmeticShards: number;
   tutorialDone: boolean;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
   // tutorial); successfulExtracts only on extract. ftueUnlocks is the
@@ -94,12 +104,20 @@ export function createDefaultSave(): SaveData {
     unlockedOperators: ['pulse'],
     achievements: [],
     prestige: { count: 0, cyberCores: 0 },
-    daily: { lastClaim: '', streak: 0, questId: '', questProgress: 0 },
+    daily: {
+      lastClaim: '',
+      questId: '',
+      questProgress: 0,
+      questCompleted: false,
+      streakDay: 0,
+      lastStreakDate: '',
+    },
     seasonPass: { tier: 0, xp: 0, premium: false },
     cosmetics: { equipped: { trail: '', skin: '', theme: '' }, owned: [] },
     infestation: { machineIds: [], failsBeforeFirst: Balance.infestation.failsBeforeInfestation },
     infestationTutorialSeen: false,
     stats: { runs: 0, extracts: 0, totalScrap: 0, bestRaid: 0, killCount: 0 },
+    cosmeticShards: 0,
     tutorialDone: false,
     raidsCompleted: 0,
     successfulExtracts: 0,
@@ -182,6 +200,32 @@ function migrateV3toV4(v3: MigratingSave): MigratingSave {
   };
 }
 
+// v4 → v5: M18 reshapes daily (drop `streak`, add questCompleted +
+// streakDay + lastStreakDate). Adds cosmeticShards counter. Carry the
+// old streak number into streakDay if present.
+function migrateV4toV5(v4: MigratingSave): MigratingSave {
+  const oldDaily = (v4.daily ?? {}) as {
+    lastClaim?: string;
+    streak?: number;
+    questId?: string;
+    questProgress?: number;
+  };
+  const carriedStreak = typeof oldDaily.streak === 'number' ? oldDaily.streak : 0;
+  return {
+    ...v4,
+    version: 5,
+    daily: {
+      lastClaim: typeof oldDaily.lastClaim === 'string' ? oldDaily.lastClaim : '',
+      questId: typeof oldDaily.questId === 'string' ? oldDaily.questId : '',
+      questProgress: typeof oldDaily.questProgress === 'number' ? oldDaily.questProgress : 0,
+      questCompleted: false,
+      streakDay: carriedStreak,
+      lastStreakDate: '',
+    },
+    cosmeticShards: typeof v4.cosmeticShards === 'number' ? (v4.cosmeticShards as number) : 0,
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -198,13 +242,14 @@ function migrate(raw: unknown): SaveData {
   if (save.version === 1) save = migrateV1toV2(save);
   if (save.version === 2) save = migrateV2toV3(save);
   if (save.version === 3) save = migrateV3toV4(save);
+  if (save.version === 4) save = migrateV4toV5(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 4) save = migrateV4toV5(save);
+  //   if (save.version === 5) save = migrateV5toV6(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

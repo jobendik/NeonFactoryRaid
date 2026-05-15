@@ -130,6 +130,20 @@ export const Strings = {
   infestationCleansingMid: ' / ',
   infestationCleansingSuffix: ' machines',
   infestationClearAd: 'CLEAR INFESTATION  [M20]',
+
+  // M18 — daily quest + streak.
+  questPanelTitle: 'DAILY QUEST',
+  questClaimReady: 'CLAIM',
+  questClaimed: 'CLAIMED',
+  questProgressMid: ' / ',
+  questExtractsText: 'Extract 2 times today',
+  questCoresText: 'Collect 3 Neon Cores',
+  questKillsText: 'Kill 50 enemies in raids',
+  questPowerupsText: 'Use 3 power-ups in one raid',
+  questGreedX2Text: 'Reach Greed x2',
+  questDamagelessText: 'Survive 60s without damage',
+  streakLabel: 'Streak: Day ',
+  questRewardToast: 'Quest reward: +100 Scrap, +1 Core, +1 Shard',
 } as const;
 
 export type StringKey = keyof typeof Strings;

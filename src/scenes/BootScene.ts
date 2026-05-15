@@ -4,6 +4,7 @@ import { saveSystem } from '../platform/SaveSystem';
 import { startAutoSave } from '../platform/AutoSave';
 import { Economy } from '../systems/EconomySystem';
 import { Strings } from '../config/Strings';
+import { DailyQuestSystem } from '../systems/DailyQuestSystem';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -26,6 +27,11 @@ export class BootScene extends Phaser.Scene {
       Economy.bankLoot(offlineScrap, 0);
       saveSystem.setPendingOfflineScrap(offlineScrap);
     }
+
+    // M18 — DailyQuestSystem subscribes to gameplay events. Init once at
+    // boot so quest progress accrues even on the first tutorial raid (the
+    // claim panel itself is gated on tutorialDone + first real raid).
+    DailyQuestSystem.init();
 
     startAutoSave();
     SDKBridge.loadingStop();
