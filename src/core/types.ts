@@ -21,6 +21,10 @@ export interface RaidEndPayload {
   // M17 — number of machines restored from cleanse this raid. Surfaced as
   // a smaller line beneath the loot card.
   machinesRestored?: number;
+  // M20 — true unless REVIVE was already prompted this raid (§17.3 mutex).
+  // Defaults to true server-side if absent; SummaryScene reads this to
+  // decide whether the DOUBLE LOOT button is interactive.
+  allowDoubleLoot?: boolean;
 }
 
 export type RaidMode = 'tutorial' | 'normal' | 'dailySeed';

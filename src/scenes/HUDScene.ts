@@ -6,6 +6,10 @@ import { InfestationSystem } from '../systems/InfestationSystem';
 import { MuteButton } from '../ui/MuteButton';
 import { SettingsMenu } from '../ui/SettingsMenu';
 import { AudioBus } from '../audio/AudioBus';
+import { QualityManager } from '../systems/QualityManager';
+import { saveSystem } from '../platform/SaveSystem';
+import { bus, Events } from '../core/EventBus';
+import { AchievementDefs, type AchievementId } from '../systems/AchievementSystem';
 import type { RaidScene } from './RaidScene';
 import type { FactoryScene } from './FactoryScene';
 
@@ -64,6 +68,8 @@ export class HUDScene extends Phaser.Scene {
   private hpText!: Phaser.GameObjects.Text;
   private scrapText!: Phaser.GameObjects.Text;
   private coresText!: Phaser.GameObjects.Text;
+  // M23 — premium currency display, factory mode only.
+  private tokensText!: Phaser.GameObjects.Text;
   private timerText!: Phaser.GameObjects.Text;
   private comboText!: Phaser.GameObjects.Text;
   private greedText!: Phaser.GameObjects.Text;
@@ -78,6 +84,17 @@ export class HUDScene extends Phaser.Scene {
   private powerupPips: PowerupPip[] = [];
   private shieldPip!: PowerupPip;
   private settingsMenu!: SettingsMenu;
+  // M21 — performance overlay (§24.5). Hidden by default; backtick toggles.
+  private perfOverlay: Phaser.GameObjects.Text | null = null;
+  private perfOverlayOn = false;
+  // FPS sampling for the rolling auto-detect window.
+  private autoDetectAccum = 0;
+  // M22 HUD pass — HP flash: red on damage, green on heal. We snapshot the
+  // last-frame HP and react to deltas. flashTimer counts down to 0 over a
+  // short window where the HP-bar fill color is overridden.
+  private lastHp = -1;
+  private hpFlashColor = 0;
+  private hpFlashTimer = 0;
 
   constructor() {
     super({ key: 'HUDScene', active: false });
@@ -142,6 +159,22 @@ export class HUDScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2000);
 
+    // M23 — Neon Tokens wallet display, factory mode only. Renders below
+    // cores when the player has any tokens or when the premium store is
+    // surfaced via the cosmetics menu.
+    this.tokensText = this.add
+      .text(rightX, 62, '', {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color: '#a76cff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+
     this.timerText = this.add
       .text(cx, 18, '', {
         fontFamily: 'monospace',
@@ -155,38 +188,40 @@ export class HUDScene extends Phaser.Scene {
       .setDepth(2000);
 
     // Combo sits just under the raid timer. Smaller / dimmer than greed so
-    // the eye reads the prominent yellow badge first.
+    // the eye reads the prominent yellow badge first. M22: anchor below the
+    // timer rather than to its side so the badges always have vertical
+    // headroom on narrow viewports.
     this.comboText = this.add
-      .text(cx - 200, 24, '', {
+      .text(cx, 52, '', {
         fontFamily: 'monospace',
         fontSize: '15px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 3,
       })
-      .setOrigin(1, 0)
+      .setOrigin(0.5, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     // Greed badge per M14: bigger, brighter, with a contrasting background
-    // pill. Lives on the opposite side of the timer from combo so they
-    // never share screen space.
+    // pill. M22: stacked directly below combo so a narrow viewport never
+    // collides the two readouts. Both center-aligned to the timer.
     this.greedText = this.add
-      .text(cx + 200, 24, '', {
+      .text(cx, 74, '', {
         fontFamily: 'monospace',
-        fontSize: '26px',
+        fontSize: '24px',
         color: '#ffd75a',
         stroke: '#000000',
         strokeThickness: 5,
         backgroundColor: '#1a0a14',
         padding: { x: 10, y: 4 },
       })
-      .setOrigin(0, 0)
+      .setOrigin(0.5, 0)
       .setScrollFactor(0)
       .setDepth(2000);
 
     this.extractBanner = this.add
-      .text(cx, 78, '', {
+      .text(cx, 112, '', {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: '#72ff9f',
@@ -263,6 +298,80 @@ export class HUDScene extends Phaser.Scene {
     this.input.on('pointerdown', unlock);
     const keyboard = this.input.keyboard;
     if (keyboard) keyboard.on('keydown', unlock);
+
+    // M21 — performance overlay toggle (backtick). Pure dev tool; left in
+    // production but undocumented per §24.5.
+    this.perfOverlay = this.add
+      .text(this.scale.width - 12, this.scale.height - 12, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#88a0a8',
+        backgroundColor: '#0a1014',
+        padding: { x: 8, y: 6 },
+        align: 'right',
+      })
+      .setOrigin(1, 1)
+      .setScrollFactor(0)
+      .setDepth(2400)
+      .setVisible(false);
+    if (keyboard) {
+      keyboard.on('keydown-BACKTICK', () => this.togglePerfOverlay());
+      // M24 — ESC opens the SettingsMenu so the player has a pause /
+      // settings affordance from the keyboard. The SettingsMenu's modal
+      // backdrop blocks input to the gameplay scene beneath it.
+      keyboard.on('keydown-ESC', () => {
+        if (this.settingsMenu.isOpen()) this.settingsMenu.close();
+        else this.settingsMenu.open();
+      });
+    }
+
+    // M23 — achievement unlock toast bridge. AchievementSystem emits
+    // ACHIEVEMENT_UNLOCKED with the id; HUDScene composes the toast
+    // copy from AchievementDefs so the system is self-contained.
+    bus.on(Events.ACHIEVEMENT_UNLOCKED, (...args: unknown[]) => {
+      const id = args[0] as AchievementId | undefined;
+      if (!id) return;
+      const def = AchievementDefs[id];
+      if (!def) return;
+      this.showAchievementToast(`${Strings.achievementUnlockedPrefix}${def.name}`);
+    });
+  }
+
+  private showAchievementToast(text: string): void {
+    const t = this.add
+      .text(this.scale.width / 2, 100, text, {
+        fontFamily: 'monospace',
+        fontSize: '17px',
+        color: '#ffd75a',
+        stroke: '#000000',
+        strokeThickness: 4,
+        backgroundColor: '#0a1014',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(2250)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      y: 120,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(3800, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => t.destroy(),
+      });
+    });
+  }
+
+  private togglePerfOverlay(): void {
+    this.perfOverlayOn = !this.perfOverlayOn;
+    if (this.perfOverlay) this.perfOverlay.setVisible(this.perfOverlayOn);
   }
 
   // Gear icon to the left of the mute button. Opens the SettingsMenu modal.
@@ -331,11 +440,23 @@ export class HUDScene extends Phaser.Scene {
     return { bg, fill, text };
   }
 
-  override update(time: number): void {
+  override update(time: number, deltaMs: number): void {
+    const fps = this.game.loop.actualFps;
     if (time - this.lastFpsUpdate > Balance.ui.fpsUpdateMs) {
       this.lastFpsUpdate = time;
-      const fps = Math.round(this.game.loop.actualFps);
-      this.fpsText.setText(`${Strings.fps}: ${fps}`);
+      this.fpsText.setText(`${Strings.fps}: ${Math.round(fps)}`);
+    }
+
+    // M21 — auto-detect tick + optional toast on preset change.
+    const dt = Math.min(0.1, deltaMs / 1000);
+    const toast = QualityManager.tick(dt, fps);
+    if (toast) this.showAutoQualityToast(toast);
+
+    // M21 — performance overlay refresh (1/4-second cadence so the text
+    // doesn't flicker; same cadence as FPS).
+    if (this.perfOverlayOn && time - this.autoDetectAccum > 250) {
+      this.autoDetectAccum = time;
+      this.renderPerfOverlay(fps);
     }
 
     const raid = this.scene.get('RaidScene') as RaidScene | undefined;
@@ -353,14 +474,97 @@ export class HUDScene extends Phaser.Scene {
     this.clearRaidHud();
   }
 
+  // M21 — small bottom-center toast surfaced when QualityManager auto-changes
+  // preset or unlocks the upgrade prompt. Mirrors the offline-scrap toast in
+  // FactoryScene visually so the player sees the same affordance.
+  private showAutoQualityToast(text: string): void {
+    const t = this.add
+      .text(this.scale.width / 2, this.scale.height - 40, text, {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#22f6ff',
+        stroke: '#000000',
+        strokeThickness: 3,
+        backgroundColor: '#0a1014',
+        padding: { x: 12, y: 6 },
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(2350)
+      .setAlpha(0);
+    this.tweens.add({
+      targets: t,
+      alpha: 1,
+      y: this.scale.height - 60,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+    this.time.delayedCall(3500, () => {
+      this.tweens.add({
+        targets: t,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => t.destroy(),
+      });
+    });
+  }
+
+  private renderPerfOverlay(fps: number): void {
+    if (!this.perfOverlay) return;
+    const raid = this.scene.get('RaidScene') as RaidScene | undefined;
+    let enemyCount = 0;
+    let pickupCount = 0;
+    let bulletCount = 0;
+    let powerupCount = 0;
+    if (raid && raid.scene.isActive()) {
+      const counts = raid.getEntityCounts();
+      enemyCount = counts.enemies;
+      pickupCount = counts.pickups;
+      bulletCount = counts.bullets;
+      powerupCount = counts.powerups;
+    }
+    const preset = QualityManager.getPreset();
+    const dpr = QualityManager.dprCap();
+    const ft = fps > 0 ? (1000 / fps).toFixed(1) : '—';
+    const lines = [
+      `FPS:    ${Math.round(fps)}  (${ft} ms)`,
+      `Enem:   ${enemyCount}`,
+      `Pick:   ${pickupCount}`,
+      `Bull:   ${bulletCount}`,
+      `Pow:    ${powerupCount}`,
+      `Qual:   ${preset.toUpperCase()}`,
+      `DPRcap: ${dpr.toFixed(1)}`,
+    ];
+    this.perfOverlay.setText(lines.join('\n'));
+  }
+
   private renderRaid(raid: RaidScene): void {
     if (this.spmText.visible) this.spmText.setVisible(false);
     if (this.deployText.visible) this.deployText.setVisible(false);
+    if (this.tokensText.visible) this.tokensText.setVisible(false);
 
     const hpInfo = raid.getPlayerHP();
     const ratio = hpInfo.max > 0 ? Math.max(0, hpInfo.hp / hpInfo.max) : 0;
+    // M22 HP flash — detect delta vs last frame. Heal → green, damage → red.
+    // Tutorial / first-frame initializes lastHp without flashing.
+    if (this.lastHp >= 0 && hpInfo.hp !== this.lastHp) {
+      const delta = hpInfo.hp - this.lastHp;
+      if (delta < 0) {
+        this.hpFlashColor = 0xff416b;
+        this.hpFlashTimer = 0.22;
+      } else if (delta > 0) {
+        this.hpFlashColor = 0x72ff9f;
+        this.hpFlashTimer = 0.22;
+      }
+    }
+    this.lastHp = hpInfo.hp;
+    let fillColor: number = ratio <= HP_LOW_RATIO ? Balance.colors.danger : Balance.colors.player;
+    if (this.hpFlashTimer > 0) {
+      fillColor = this.hpFlashColor;
+      this.hpFlashTimer = Math.max(0, this.hpFlashTimer - this.game.loop.delta / 1000);
+    }
     this.hpBarFill.setSize(Math.max(0, (HP_BAR_W - 2) * ratio), HP_BAR_H - 2);
-    this.hpBarFill.setFillStyle(ratio <= HP_LOW_RATIO ? Balance.colors.danger : Balance.colors.player, 1);
+    this.hpBarFill.setFillStyle(fillColor, 1);
     this.hpBarBg.setVisible(true);
     this.hpBarFill.setVisible(true);
     this.hpText.setText(`${Strings.hpLabel} ${Math.ceil(hpInfo.hp)} / ${hpInfo.max}`);
@@ -485,6 +689,14 @@ export class HUDScene extends Phaser.Scene {
     const wallet = Economy.getWallet();
     this.scrapText.setText(`${Strings.summaryScrap} ${wallet.scrap}`);
     this.coresText.setText(`${Strings.summaryCores} ${wallet.cores}`);
+    // M23 — token wallet display. Shown only on factory mode; raid HUD
+    // suppresses it (no token spend during raids).
+    const tokens = saveSystem.get().tokens ?? 0;
+    if (tokens > 0) {
+      this.tokensText.setText(`${Strings.walletTokens} ${tokens}`).setVisible(true);
+    } else {
+      this.tokensText.setVisible(false);
+    }
 
     const spm = factory.getSpm();
     this.spmText.setText(`${Strings.factorySpm}  ${spm.toFixed(0)}`);
@@ -515,6 +727,7 @@ export class HUDScene extends Phaser.Scene {
     if (this.spmText) this.spmText.setVisible(false);
     if (this.deployText) this.deployText.setVisible(false);
     if (this.cleanseText) this.cleanseText.setVisible(false);
+    if (this.tokensText) this.tokensText.setVisible(false);
     if (this.shieldPip) this.hideAllPips();
   }
 
@@ -562,7 +775,9 @@ export class HUDScene extends Phaser.Scene {
     this.waypoint.clear();
     this.waypoint.setVisible(true);
     this.waypoint.fillStyle(color, 1);
-    this.waypoint.lineStyle(2, 0xffffff, 0.9);
+    // M22 — thicker stroke so the arrow reads cleanly against the busiest
+    // backgrounds (especially the deep-end greed vignette).
+    this.waypoint.lineStyle(3, 0xffffff, 1);
     this.waypoint.beginPath();
     for (let i = 0; i < localPts.length; i++) {
       const pt = localPts[i];

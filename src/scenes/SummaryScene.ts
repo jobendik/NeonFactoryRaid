@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
 import { Strings } from '../config/Strings';
+import { Economy } from '../systems/EconomySystem';
+import { AdManager } from '../platform/AdManager';
+import { saveSystem } from '../platform/SaveSystem';
 import type { RaidEndPayload, RaidEndState } from '../core/types';
 
 // Run-end summary per blueprint §7.10. Launched by RaidScene as a top-stack overlay
@@ -32,6 +35,15 @@ export class SummaryScene extends Phaser.Scene {
   private tutorial = false;
   private newlyInfested = 0;
   private machinesRestored = 0;
+  // M20 — DOUBLE LOOT availability: false if REVIVE was already shown this
+  // raid (§17.3 max-1-rewarded-prompt rule) OR if the raid wasn't a
+  // successful extract.
+  private allowDoubleLoot = true;
+  private doubleLootClaimed = false;
+  private doubleLootBg: Phaser.GameObjects.Rectangle | null = null;
+  private doubleLootLabel: Phaser.GameObjects.Text | null = null;
+  private scrapValueText: Phaser.GameObjects.Text | null = null;
+  private coresValueText: Phaser.GameObjects.Text | null = null;
 
   constructor() {
     super({ key: 'SummaryScene' });
@@ -46,7 +58,13 @@ export class SummaryScene extends Phaser.Scene {
       this.tutorial = !!data.tutorial;
       this.newlyInfested = data.newlyInfested ?? 0;
       this.machinesRestored = data.machinesRestored ?? 0;
+      this.allowDoubleLoot = data.allowDoubleLoot !== false;
     }
+    this.doubleLootClaimed = false;
+    this.doubleLootBg = null;
+    this.doubleLootLabel = null;
+    this.scrapValueText = null;
+    this.coresValueText = null;
   }
 
   create(): void {
@@ -125,7 +143,7 @@ export class SummaryScene extends Phaser.Scene {
         color: '#22f6ff',
       })
       .setOrigin(0, 0.5);
-    this.add
+    this.scrapValueText = this.add
       .text(w / 2 + cardW / 2 - 30, cardY - 36, `+${this.loot.scrap}`, {
         fontFamily: 'monospace',
         fontSize: '24px',
@@ -140,7 +158,7 @@ export class SummaryScene extends Phaser.Scene {
         color: '#ffd75a',
       })
       .setOrigin(0, 0.5);
-    this.add
+    this.coresValueText = this.add
       .text(w / 2 + cardW / 2 - 30, cardY + 16, `+${this.loot.cores}`, {
         fontFamily: 'monospace',
         fontSize: '24px',
@@ -172,19 +190,25 @@ export class SummaryScene extends Phaser.Scene {
       return;
     }
 
-    const allowDoubleLoot = false; // M20
+    // §17.2 DOUBLE LOOT — only offered on successful extraction. Suppressed
+    // when REVIVE was already prompted this raid (§17.3 mutex). Disabled
+    // once claimed so the player can't double-dip.
+    const doubleLootEnabled =
+      this.endState === 'extracted' && this.allowDoubleLoot && !this.doubleLootClaimed;
 
-    this.makeButton(
+    const dlBtn = this.makeButton(
       w / 2 - 280,
       buttonY,
       Strings.summaryDoubleLoot,
-      allowDoubleLoot ? 0xffd75a : 0x444444,
-      allowDoubleLoot ? '#000000' : '#888888',
-      allowDoubleLoot,
+      doubleLootEnabled ? 0xffd75a : 0x444444,
+      doubleLootEnabled ? '#000000' : '#888888',
+      doubleLootEnabled,
       () => {
-        // M20 - rewarded ad path
+        void this.handleDoubleLoot();
       },
     );
+    this.doubleLootBg = dlBtn.bg;
+    this.doubleLootLabel = dlBtn.label;
 
     this.makeButton(w / 2, buttonY, Strings.summaryFactory, 0x22f6ff, '#000000', true, () =>
       this.gotoFactory(),
@@ -201,6 +225,38 @@ export class SummaryScene extends Phaser.Scene {
     );
   }
 
+  // M20 DOUBLE LOOT — rewarded-ad path. On grant, doubles BOTH the displayed
+  // numbers and the banked wallet (additional Δ on top of the already-banked
+  // values). Greed/penalty multipliers already ran in RaidScene, so we just
+  // add another `loot.scrap` and `loot.cores` to bank.
+  private async handleDoubleLoot(): Promise<void> {
+    if (this.doubleLootClaimed) return;
+    const granted = await AdManager.offer(this, {
+      title: Strings.adDoubleLootTitle,
+      description: Strings.adDoubleLootDesc,
+    });
+    if (!granted) return;
+    this.doubleLootClaimed = true;
+    // Compose on top of already-multiplied loot (greed-amplified DOUBLE LOOT
+    // intentional per spec: "composes with greed multiplier").
+    const bonusScrap = this.loot.scrap;
+    const bonusCores = this.loot.cores;
+    this.loot.scrap += bonusScrap;
+    this.loot.cores += bonusCores;
+    Economy.bankLoot(bonusScrap, bonusCores);
+    void saveSystem.persist();
+    if (this.scrapValueText) this.scrapValueText.setText(`+${this.loot.scrap}`);
+    if (this.coresValueText) this.coresValueText.setText(`+${this.loot.cores}`);
+    // Visually disable the button.
+    if (this.doubleLootBg) {
+      this.doubleLootBg.setFillStyle(0x444444, 0.55);
+      this.doubleLootBg.disableInteractive();
+    }
+    if (this.doubleLootLabel) {
+      this.doubleLootLabel.setColor('#888888');
+    }
+  }
+
   private makeButton(
     x: number,
     y: number,
@@ -209,7 +265,7 @@ export class SummaryScene extends Phaser.Scene {
     textColor: string,
     enabled: boolean,
     onClick: () => void,
-  ): void {
+  ): { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text } {
     const bw = 230;
     const bh = 56;
     const bg = this.add.rectangle(x, y, bw, bh, bgColor, enabled ? 1 : 0.55);
@@ -220,13 +276,14 @@ export class SummaryScene extends Phaser.Scene {
       bg.on('pointerout', () => bg.setFillStyle(bgColor, 1));
       bg.on('pointerdown', onClick);
     }
-    this.add
+    const labelText = this.add
       .text(x, y, label, {
         fontFamily: 'monospace',
         fontSize: '16px',
         color: textColor,
       })
       .setOrigin(0.5);
+    return { bg, label: labelText };
   }
 
   private gotoFactory(): void {

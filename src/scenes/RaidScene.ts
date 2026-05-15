@@ -30,6 +30,12 @@ import { todayUtcDate as todayUtcDateForLeaderboard } from '../config/QuestDefs'
 import type { CardDef } from '../config/CardDefs';
 import type { DraftSceneInit } from './DraftScene';
 import { Rng, dailySeed } from '../core/Rng';
+import { SDKBridge } from '../platform/SDKBridge';
+import { AdManager } from '../platform/AdManager';
+import { SpatialGrid } from '../systems/SpatialGrid';
+import { QualityManager } from '../systems/QualityManager';
+import { AchievementSystem } from '../systems/AchievementSystem';
+import { SeasonSystem } from '../systems/SeasonSystem';
 import {
   sfxCore,
   sfxScrap,
@@ -134,7 +140,25 @@ export class RaidScene extends Phaser.Scene {
   // M17 — kills against 'infested' enemies this raid. Counts toward
   // restoring infested machines at raid end.
   private cleanseProgress = 0;
-  private onPlayerDied = (): void => this.requestEnd('failed');
+  // M20 — per-raid single-use flag for the EXTEND RUN ad. REVIVE / DOUBLE
+  // LOOT competition lives in AdManager (cross-scene flag).
+  private extendRunUsed = false;
+  // M20 — RaidScene sets this when REVIVE is shown so SummaryScene knows
+  // not to also offer DOUBLE LOOT (§17.3: max 1 rewarded prompt per raid).
+  private revivePromptShown = false;
+  // M20 — async ad flow gate. While a modal is being shown for REVIVE /
+  // EXTEND RUN, the raid is paused; update() guards against re-entry.
+  private adInFlight = false;
+  // M21 — spatial grids rebuilt once per frame so WeaponSystem and the
+  // pickup-magnet loop run in O(cells visited) instead of O(group size).
+  private enemyGrid = new SpatialGrid<Enemy>();
+  private pickupGrid = new SpatialGrid<Pickup>();
+  private pickupScratch: Pickup[] = [];
+  private powerupScratch: Powerup[] = [];
+  private powerupGrid = new SpatialGrid<Powerup>();
+  private onPlayerDied = (): void => {
+    void this.handlePlayerDied();
+  };
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => {
     this.greed.start();
@@ -233,6 +257,7 @@ export class RaidScene extends Phaser.Scene {
       () => ({ x: this.player.x, y: this.player.y }),
       () => this.enemies.getChildren(),
       this.rng,
+      () => this.enemyGrid,
     );
     this.weapons.setDamageLevel(UpgradeEffects.weaponDamageLevel());
     if (this.isTutorial) this.weapons.setDamageMult(Balance.tutorial.playerDamageMult);
@@ -303,6 +328,13 @@ export class RaidScene extends Phaser.Scene {
     bus.on(Events.DRAFT_PICKED, this.onDraftPicked);
 
     MusicEngine.startRaid();
+    // M20 — bracket the raid with SDK lifecycle calls (§18.3). Tutorial is
+    // still considered "gameplay" per the spec, so we call it on all raids.
+    SDKBridge.gameplayStart();
+    AdManager.resetForRaid();
+    this.extendRunUsed = false;
+    this.revivePromptShown = false;
+    this.adInFlight = false;
     bus.emit(Events.RAID_STARTED, this.mode);
   }
 
@@ -420,6 +452,14 @@ export class RaidScene extends Phaser.Scene {
     this.greed.update(dt);
     this.powerupSystem.update(dt);
 
+    // M21 — rebuild spatial grids once per frame against the live group
+    // contents. Cheap enough to do unconditionally (the grids re-use bucket
+    // arrays). WeaponSystem reads enemyGrid; the magnet loop below reads
+    // pickupGrid + powerupGrid.
+    this.enemyGrid.rebuild(this.enemies.getChildren() as unknown as Iterable<Enemy>);
+    this.pickupGrid.rebuild(this.pickups.getChildren() as unknown as Iterable<Pickup>);
+    this.powerupGrid.rebuild(this.powerups.getChildren() as unknown as Iterable<Powerup>);
+
     if (this.isTutorial) this.tickTutorial(dt);
 
     // Push current power-up state into the weapon. Cheap to do every frame -
@@ -451,15 +491,27 @@ export class RaidScene extends Phaser.Scene {
       this.powerupSystem.getMagnetMult() *
       this.runMods.magnetMult *
       magnetStormMult;
-    for (const child of this.pickups.getChildren()) {
-      const p = child as Pickup;
+    // M21 — spatial-grid query instead of full-group scan. Anything past
+    // magnetRadius cannot be pulled this frame; the grid skips those cells.
+    const nearPickups = this.pickupGrid.queryNearby(
+      this.player.x,
+      this.player.y,
+      magnetRadius,
+      this.pickupScratch,
+    );
+    for (const p of nearPickups) {
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
     // Powerups magnetize on the same radius but with a separate, more
     // forgiving pull profile (Powerup.updateMagnet's internal speeds).
-    for (const child of this.powerups.getChildren()) {
-      const p = child as Powerup;
+    const nearPowerups = this.powerupGrid.queryNearby(
+      this.player.x,
+      this.player.y,
+      magnetRadius,
+      this.powerupScratch,
+    );
+    for (const p of nearPowerups) {
       if (p.active) p.updateMagnet(dt, this.player.x, this.player.y, magnetRadius);
     }
 
@@ -472,8 +524,77 @@ export class RaidScene extends Phaser.Scene {
     this.tickOperatorOrbs(dt);
     DailyQuestSystem.tickRaidElapsed(this.elapsed);
 
-    if (this.timeRemaining <= 0) {
+    if (this.timeRemaining <= 0 && !this.adInFlight) {
+      void this.handleTimerExpired();
+    }
+  }
+
+  // M20 EXTEND RUN — when the timer hits 0, optionally offer +30s before
+  // finalizing 'collapsed'. Single use per raid; not offered in tutorial;
+  // not offered if the player already declined / already accepted (the
+  // extendRunUsed flag blocks repeat offers within the same raid).
+  private async handleTimerExpired(): Promise<void> {
+    if (this.phase !== 'active') return;
+    if (this.adInFlight) return;
+    if (this.isTutorial || this.extendRunUsed) {
       this.requestEnd('collapsed');
+      return;
+    }
+    this.extendRunUsed = true;
+    this.adInFlight = true;
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adExtendRunTitle,
+      description: Strings.adExtendRunDesc,
+    });
+    this.adInFlight = false;
+    this.scene.resume();
+    SDKBridge.gameplayStart();
+    if (granted) {
+      this.timeRemaining = Balance.ads.extendRunSeconds;
+      this.lastTickSecond = -1;
+    } else {
+      this.requestEnd('collapsed');
+    }
+  }
+
+  // M20 REVIVE — replaces the immediate 'failed' transition when REVIVE
+  // is eligible (§17.2 + §17.3). Eligibility: not tutorial, post-raid-3+,
+  // probabilistic, and no other rewarded prompt already shown this raid.
+  // On accept, restore HP to 60%, grant brief invuln, resume the run.
+  private async handlePlayerDied(): Promise<void> {
+    if (this.phase !== 'active') return;
+    if (this.adInFlight) return;
+    const eligible =
+      !this.isTutorial &&
+      AdManager.canOfferRaidPrompt() &&
+      saveSystem.get().raidsCompleted >= Balance.ads.reviveAfterRaidsCompleted &&
+      Math.random() < Balance.ads.reviveProbability;
+    if (!eligible) {
+      this.requestEnd('failed');
+      return;
+    }
+    this.revivePromptShown = true;
+    AdManager.markRaidPromptShown();
+    this.adInFlight = true;
+    this.scene.pause();
+    const granted = await AdManager.offer(this, {
+      title: Strings.adReviveTitle,
+      description: Strings.adReviveDesc,
+      borderColor: 0x72ff9f,
+    });
+    this.adInFlight = false;
+    if (granted) {
+      // Restore HP, brief invuln, resume the raid.
+      this.player.reviveToRatio(Balance.ads.reviveHpRatio, Balance.ads.reviveInvulnSec);
+      this.scene.resume();
+      SDKBridge.gameplayStart();
+    } else {
+      // Decline OR SDK failure → run ends as failed. Resume long enough to
+      // let finishRaid drive the transition into SummaryScene.
+      this.scene.resume();
+      SDKBridge.gameplayStart();
+      this.requestEnd('failed');
     }
   }
 
@@ -821,6 +942,45 @@ export class RaidScene extends Phaser.Scene {
 
   private drawBackground(): void {
     const wb = Balance.player.worldBounds;
+    // M22 §19.5 parallax: optional far + mid layers behind the main grid,
+    // both at lower alpha. Quality preset gates how many layers render —
+    // 0 (Low), 2 (Medium), 3 (High). Layers use a scrollFactor below 1 so
+    // they drift slower than the foreground as the camera follows the
+    // player, giving a subtle depth cue without competing for attention.
+    const layers = QualityManager.parallaxLayers();
+    if (layers >= 1) {
+      const far = this.add.graphics();
+      far.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.5);
+      const stepFar = Balance.ui.gridStep * 1.8;
+      for (let x = wb.minX; x <= wb.maxX; x += stepFar) {
+        far.moveTo(x, wb.minY);
+        far.lineTo(x, wb.maxY);
+      }
+      for (let y = wb.minY; y <= wb.maxY; y += stepFar) {
+        far.moveTo(wb.minX, y);
+        far.lineTo(wb.maxX, y);
+      }
+      far.strokePath();
+      far.setScrollFactor(0.3);
+      far.setDepth(-3);
+    }
+    if (layers >= 2) {
+      const mid = this.add.graphics();
+      mid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.7);
+      const stepMid = Balance.ui.gridStep * 1.25;
+      for (let x = wb.minX; x <= wb.maxX; x += stepMid) {
+        mid.moveTo(x, wb.minY);
+        mid.lineTo(x, wb.maxY);
+      }
+      for (let y = wb.minY; y <= wb.maxY; y += stepMid) {
+        mid.moveTo(wb.minX, y);
+        mid.lineTo(wb.maxX, y);
+      }
+      mid.strokePath();
+      mid.setScrollFactor(0.6);
+      mid.setDepth(-2);
+    }
+
     const grid = this.add.graphics();
     grid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha);
     const step = Balance.ui.gridStep;
@@ -897,6 +1057,10 @@ export class RaidScene extends Phaser.Scene {
     this.greed.stop();
     MusicEngine.stop();
     if (state === 'failed' || state === 'collapsed') sfxRaidFailed();
+    // M20 — §18.3 SDK lifecycle: signal good moment on successful extract,
+    // then stop gameplay. Bracket per raid regardless of outcome.
+    if (state === 'extracted') SDKBridge.happytime();
+    SDKBridge.gameplayStop();
 
     // Greed multiplies banked loot on successful extract. Death and collapse
     // both forfeit 50% of unbanked loot per the prototype rule. Combo is already
@@ -943,6 +1107,20 @@ export class RaidScene extends Phaser.Scene {
       rng: this.rng,
     });
 
+    // M20 — consume one-raid OPERATOR TRY-OUT (any outcome). Stamp lastRaidDate
+    // so DAILY CRATE knows the player has raided today.
+    const save = saveSystem.get();
+    save.tryOutOperator = null;
+    save.lastRaidDate = todayUtcDateForLeaderboard();
+
+    // M23 — achievements + season XP per blueprint §10.4 / §16.5. Both run
+    // AFTER FtueProgress so raidsCompleted is current; both are no-ops on
+    // tutorial raids.
+    if (!this.isTutorial) {
+      AchievementSystem.handleRaidEnd({ state, greedMult, tutorial: this.isTutorial });
+      SeasonSystem.awardRaidXp();
+    }
+
     // Persist immediately on raid-end so the player can't lose loot to a tab
     // close on the summary screen. The 10s autosave and the RAID_ENDED handler
     // both still fire later; this is the belt-and-suspenders save.
@@ -956,6 +1134,9 @@ export class RaidScene extends Phaser.Scene {
       tutorial: this.isTutorial,
       newlyInfested: infOutcome.newlyInfested,
       machinesRestored: infOutcome.restored,
+      // M20 — DOUBLE LOOT vs REVIVE mutex (§17.3). Suppress DOUBLE LOOT
+      // on the summary if REVIVE was already prompted this raid.
+      allowDoubleLoot: !this.revivePromptShown,
     };
 
     // Small delay so the moment's tail visuals finish before the summary appears.
@@ -1265,6 +1446,20 @@ export class RaidScene extends Phaser.Scene {
   // least one charge. The charge isn't timed - it lives on the Player.
   getShieldCharges(): number {
     return this.player.shieldCharges;
+  }
+
+  // M21 — entity counts read by the performance overlay (§24.5). Live
+  // counts of active group members; no allocation.
+  getEntityCounts(): { enemies: number; pickups: number; bullets: number; powerups: number } {
+    let e = 0;
+    let p = 0;
+    let b = 0;
+    let pw = 0;
+    for (const c of this.enemies.getChildren()) if (c.active) e++;
+    for (const c of this.pickups.getChildren()) if (c.active) p++;
+    for (const c of this.bullets.getChildren()) if (c.active) b++;
+    for (const c of this.powerups.getChildren()) if (c.active) pw++;
+    return { enemies: e, pickups: p, bullets: b, powerups: pw };
   }
 
   private spawnRadialFlash(): void {

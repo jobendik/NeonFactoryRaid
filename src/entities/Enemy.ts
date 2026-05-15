@@ -251,6 +251,14 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       const r = spec.size / 2;
       g.fillRect(dim / 2 - r, dim / 2 - r, r * 2, r * 2);
       g.strokeRect(dim / 2 - r, dim / 2 - r, r * 2, r * 2);
+      // M22 §19.2 — Tanks should LOOK like tanks. Add an inner armor band
+      // that runs across the body so the shape reads as armored, not just a
+      // bigger square. Elites get the same band scaled to their size.
+      g.lineStyle(2, 0xffffff, 0.5);
+      g.strokeRect(dim / 2 - r + 4, dim / 2 - r + 4, r * 2 - 8, r * 2 - 8);
+      g.lineStyle(2, 0xffffff, 0.85);
+      g.lineBetween(dim / 2 - r + 6, dim / 2, dim / 2 + r - 6, dim / 2);
+      g.lineStyle(2, 0xffffff, 0.85);
     } else {
       const r = spec.size / 2;
       g.beginPath();

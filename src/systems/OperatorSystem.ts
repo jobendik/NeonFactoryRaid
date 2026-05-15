@@ -49,11 +49,39 @@ export const OperatorSystem = {
     return true;
   },
 
+  // M20 — OPERATOR TRY-OUT: when the player accepted the rewarded ad on the
+  // operator picker, save.tryOutOperator holds an unowned operator id that
+  // should be used IN PLACE OF selectedOperator for exactly one raid. The
+  // raid's outcome doesn't matter; RaidScene clears the flag on raid end.
+  // Returns the effective id (try-out if set, else selectedOperator).
+  getEffectiveForRaid(): OperatorId {
+    const save = saveSystem.get();
+    const tryOut = save.tryOutOperator;
+    if (tryOut && tryOut in OperatorDefs && !OperatorDefs[tryOut as OperatorId].locked) {
+      return tryOut as OperatorId;
+    }
+    return OperatorSystem.getSelected();
+  },
+
   // Called by RaidScene at raid start, after Player + WeaponSystem caches are
   // seeded with upgrade values. Mutates RunMods so card picks compose on top.
   applyOperatorMods(mods: RunMods): void {
-    const id = OperatorSystem.getSelected();
+    const id = OperatorSystem.getEffectiveForRaid();
     const def = OperatorDefs[id];
     def.apply(mods);
+  },
+
+  // Caller for the operator picker tile: set the try-out target. Persisted
+  // via the existing autosave; consumed at the next raid start.
+  setTryOut(id: OperatorId): void {
+    saveSystem.get().tryOutOperator = id;
+  },
+
+  clearTryOut(): void {
+    saveSystem.get().tryOutOperator = null;
+  },
+
+  getTryOut(): OperatorId | null {
+    return saveSystem.get().tryOutOperator;
   },
 };

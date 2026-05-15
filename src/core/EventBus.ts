@@ -59,6 +59,8 @@ export const Events = {
   SAVE_PERSISTED: 'save:persisted',
   OPERATOR_SELECTED: 'operator:selected',
   OPERATOR_UNLOCKED: 'operator:unlocked',
+  QUALITY_CHANGED: 'quality:changed',
+  SEASON_TIER_REACHED: 'season:tier-reached',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events];

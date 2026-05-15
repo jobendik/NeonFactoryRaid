@@ -3,6 +3,7 @@ import { Balance } from '../config/Balance';
 import { Enemy } from '../entities/Enemy';
 import type { EnemyKind } from '../config/EnemyDefs';
 import type { Rng } from '../core/Rng';
+import { QualityManager } from './QualityManager';
 
 // Spawn director per blueprint §7.2:
 //   - Spawn cooldown ramps from 0.95s -> 0.24s as the raid progresses (intensity 0..1).
@@ -101,7 +102,11 @@ export class WaveDirector {
     const effectiveSpawnMult = this.spawnRateMult * greedSpawnMult;
     const intensity = Math.min(1, this.elapsed / this.raidDuration);
     const rawCap = 7 + Math.floor(intensity * 25);
-    const cap = Math.min(Balance.enemies.maxOnScreen, Math.max(1, Math.floor(rawCap * effectiveSpawnMult)));
+    // M21 — the absolute ceiling is the active quality preset's enemyCap
+    // rather than Balance.enemies.maxOnScreen, so a Low-quality drop
+    // squeezes the simultaneous-cap immediately.
+    const qualityCap = QualityManager.enemyCap();
+    const cap = Math.min(qualityCap, Math.max(1, Math.floor(rawCap * effectiveSpawnMult)));
 
     // Boss wave (§7.3 greed x3): spawn a single elite the first time we cross
     // a step that calls for one. The eliteSpawned latch ensures we don't

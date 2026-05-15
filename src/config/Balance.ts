@@ -179,6 +179,46 @@ export const Balance = {
     maxPopups: 70,
     maxPickups: 220,
     dtClamp: 0.033,
+    // M21 spatial-grid cell size for nearest-enemy + pickup-magnet queries.
+    // 120px works well at world-bounds 1600x1120 — small enough to keep
+    // bucket sizes low (≤4 enemies/cell typical) without producing too
+    // many cells (≈ 14×10 = 140 buckets max).
+    spatialGridCellPx: 120,
+  },
+  // §24 quality + auto-detect tuning. Default preset is medium; auto-detect
+  // can drop to low on sustained <40fps. The dprCap is reserved for future
+  // canvas-resolution work; the rest are live caps read each frame.
+  quality: {
+    defaultPreset: 'medium' as const,
+    presets: {
+      low: {
+        dprCap: 1.0,
+        maxParticles: 120,
+        glow: false,
+        parallaxLayers: 0,
+        enemyCap: 20,
+      },
+      medium: {
+        dprCap: 1.5,
+        maxParticles: 240,
+        glow: false,
+        parallaxLayers: 2,
+        enemyCap: 28,
+      },
+      high: {
+        dprCap: 2.0,
+        maxParticles: 360,
+        glow: true,
+        parallaxLayers: 3,
+        enemyCap: 32,
+      },
+    },
+    // Rolling-FPS auto-detect: drop to Low when avg < N for `downgradeWindow`
+    // sustained; offer High (one-time) when avg > M for `upgradeWindow` sustained.
+    autoDowngradeBelowFps: 40,
+    autoUpgradeAboveFps: 58,
+    autoDowngradeWindowSec: 5,
+    autoUpgradeWindowSec: 30,
   },
   rendering: {
     width: 1280,
@@ -234,6 +274,15 @@ export const Balance = {
     minPullSpeed: 220,
     maxPullSpeed: 880,
     pickupLifespanSec: 14,
+    // M22 §8.5 — Magnet Lv. 5 orbit-before-collection. orbitEntryRadius is
+    // the distance at which the orbit phase engages; orbitRadius is the
+    // ring the pickups trace around the player; orbitDurationSec is how
+    // long the dance lasts before final beeline; orbitSpeedRad is the
+    // angular velocity (full revolution per ~0.6s).
+    orbitEntryRadius: 60,
+    orbitRadius: 36,
+    orbitDurationSec: 0.3,
+    orbitSpeedRad: 10.0,
   },
   shooter: {
     desiredDistance: 280,
@@ -262,7 +311,9 @@ export const Balance = {
     momentRingDurationMs: 800,
     flyInSpeed: 1600,
     waypointEdgeMargin: 50,
-    waypointSize: 22,
+    // M22 HUD pass — waypoint arrow size bumped from 22 → 28 so it reads
+    // clearly at mobile size; HUDScene also strokes it with a thicker outline.
+    waypointSize: 28,
   },
   // §12 in-run drafting. Card numerics are sourced from the blueprint's card
   // list; tweaking here is a one-file pass for balance.
@@ -293,6 +344,31 @@ export const Balance = {
     critMult: 3.0,
     vampiricChanceAdd: 0.10,
     vampiricHeal: 5,
+  },
+  // §17 rewarded ad placements. All tuning lives here so the §17.3 frequency
+  // rules are one-file changes if we revisit them. Real ads are post-launch;
+  // M20 wires through SDKBridge.requestRewarded() which returns success in
+  // dev so the reward flows are testable.
+  ads: {
+    // REVIVE — gated behind `raidsCompleted >= reviveAfterRaidsCompleted` at
+    // time of death (tutorial counts). Probabilistic so revive doesn't feel
+    // like a guaranteed crutch.
+    reviveAfterRaidsCompleted: 3,
+    reviveProbability: 0.75,
+    reviveHpRatio: 0.6,
+    reviveInvulnSec: 2.2,
+    // EXTEND RUN — +Nsec to the raid timer. Single use per raid (RaidScene
+    // tracks the per-raid flag).
+    extendRunSeconds: 30,
+    // FACTORY BOOST — 2x SPM for N ms, real-time cooldown of M ms.
+    factoryBoostDurationMs: 120_000,   // 2 minutes
+    factoryBoostCooldownMs: 600_000,   // 10 minutes
+    // DAILY CRATE — once per UTC day after the day's first raid. Rolls
+    // a small Scrap range or a single Core.
+    dailyCrateScrapMin: 100,
+    dailyCrateScrapMax: 500,
+    dailyCrateScrapProbability: 0.6,
+    dailyCrateCoreReward: 1,
   },
   factory: {
     backgroundColor: '#04080c',

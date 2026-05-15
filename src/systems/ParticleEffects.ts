@@ -1,12 +1,17 @@
 import Phaser from 'phaser';
 import { EnemyDefs, type EnemyKind } from '../config/EnemyDefs';
 import { Balance } from '../config/Balance';
+import { QualityManager } from './QualityManager';
 
 export const PARTICLE_TEXTURE_KEY = 'particle-dot';
 
 // Centralizes Phaser.ParticleEmitter instances per effect. Emitters are persistent and idle
 // (emitting:false); call .explode() to fire a one-shot burst at a given position.
 // Per architecture rules, particles never own physics bodies.
+//
+// M21: explode counts pass through QualityManager.particleQuantity() so the
+// Low/Medium/High preset caps act as a live throttle without changing
+// callsites.
 
 export class ParticleEffects {
   private deathEmitters: Map<EnemyKind, Phaser.GameObjects.Particles.ParticleEmitter> = new Map();
@@ -31,7 +36,7 @@ export class ParticleEffects {
   enemyDeath(kind: EnemyKind, x: number, y: number, quantity = Balance.particles.enemyDeathCount): void {
     const e = this.deathEmitters.get(kind);
     if (!e) return;
-    e.explode(quantity, x, y);
+    e.explode(QualityManager.particleQuantity(quantity), x, y);
   }
 
   static ensureTexture(scene: Phaser.Scene): void {
