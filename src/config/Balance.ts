@@ -159,6 +159,21 @@ export const Balance = {
     maxPullSpeed: 880,
     pickupLifespanSec: 14,
   },
+  shooter: {
+    desiredDistance: 280,
+    minDistance: 220,
+    maxDistance: 360,
+    telegraphSec: 0.4,
+    fireIntervalMinSec: 2.0,
+    fireIntervalMaxSec: 3.0,
+    fireRangeMax: 520,
+    bulletSpeed: 300,
+    bulletDamage: 10,
+    bulletLifespanSec: 4.0,
+    bulletMaxOnField: 32,
+    telegraphAlpha: 0.75,
+    telegraphWidth: 2,
+  },
 } as const;
 
 export type BalanceConfig = typeof Balance;

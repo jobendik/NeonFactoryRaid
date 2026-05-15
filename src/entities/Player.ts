@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import { bus, Events } from '../core/EventBus';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
 
@@ -10,11 +11,14 @@ export interface PlayerInput {
 }
 
 export class Player extends Phaser.Physics.Arcade.Sprite {
+  hp = Balance.player.baseHP;
+  maxHp = Balance.player.baseHP;
   private vx = 0;
   private vy = 0;
   private dashTimer = 0;
   private dashCooldownTimer = 0;
   private invulnTimer = 0;
+  private hitInvulnTimer = 0;
   private facing = 0;
   private body_!: Phaser.Physics.Arcade.Body;
 
@@ -52,6 +56,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.dashCooldownTimer = Math.max(0, this.dashCooldownTimer - dt);
     this.dashTimer = Math.max(0, this.dashTimer - dt);
     this.invulnTimer = Math.max(0, this.invulnTimer - dt);
+    this.hitInvulnTimer = Math.max(0, this.hitInvulnTimer - dt);
 
     if (input.dash && this.dashCooldownTimer <= 0 && this.dashTimer <= 0) {
       this.startDash(input);
@@ -98,7 +103,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   isInvulnerable(): boolean {
-    return this.invulnTimer > 0;
+    return this.invulnTimer > 0 || this.hitInvulnTimer > 0;
   }
 
   dashCooldownRemaining(): number {
@@ -107,5 +112,21 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   getFacing(): number {
     return this.facing;
+  }
+
+  // Returns the amount actually applied; 0 if invulnerable or already at 0 HP.
+  takeDamage(amount: number): number {
+    if (this.isInvulnerable() || this.hp <= 0) return 0;
+    const applied = Math.min(this.hp, amount);
+    this.hp -= applied;
+    this.hitInvulnTimer = Balance.player.invulnAfterHit;
+    this.scene.cameras.main.shake(Balance.ui.hitShakeDuration, Balance.ui.hitShakeIntensity);
+    this.setAlpha(0.45);
+    this.scene.time.delayedCall(110, () => {
+      if (this.active) this.setAlpha(1);
+    });
+    bus.emit(Events.PLAYER_DAMAGED, applied, this.hp);
+    if (this.hp <= 0) bus.emit(Events.PLAYER_DIED);
+    return applied;
   }
 }

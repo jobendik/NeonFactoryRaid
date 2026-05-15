@@ -56,7 +56,19 @@ export class WaveDirector {
   }
 
   private pickKind(): EnemyKind {
-    // M2: Grunt-only. Weighted roll across the §7.2 table lands in M5.
+    // Weighted roll across blueprint §7.2 spawn weights.
+    // Elites (96-100%) are reserved for later milestones - we re-roll as Grunt.
+    const w = Balance.enemies.weights;
+    const r = Math.random();
+    let acc = w.grunt;
+    if (r < acc) return 'grunt';
+    acc += w.swarmer;
+    if (r < acc) return 'swarmer';
+    acc += w.shooter;
+    if (r < acc) return 'shooter';
+    acc += w.tank;
+    if (r < acc) return 'tank';
+    // Elite slot - return Grunt until elites are implemented.
     return 'grunt';
   }
 
