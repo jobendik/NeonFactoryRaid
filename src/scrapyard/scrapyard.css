@@ -1,0 +1,316 @@
+/* Scrapyard FPS HUD styles. Loaded by ScrapyardHUD when the scene boots. */
+
+#scrapyard-root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 50;
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  color: #c0e0ff;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#scrapyard-canvas-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+}
+
+#scrapyard-canvas-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.sy-hidden { display: none !important; }
+
+/* Damage vignette */
+#sy-damage-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(255, 0, 0, 0.5) 100%);
+  transition: opacity 0.1s;
+  z-index: 51;
+}
+
+/* Crosshair */
+#sy-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 0;
+  height: 0;
+}
+
+#sy-crosshair-dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: #00ffcc;
+  border-radius: 50%;
+  top: -2px;
+  left: -2px;
+  box-shadow: 0 0 4px #00ffcc;
+  transition: all 0.05s;
+}
+
+#sy-crosshair-dot.sy-hit-flash {
+  width: 8px;
+  height: 8px;
+  top: -4px;
+  left: -4px;
+  background: #ff4444;
+  box-shadow: 0 0 12px #ff4444;
+}
+
+.sy-crosshair-line {
+  position: absolute;
+  background: #00ffcc;
+  box-shadow: 0 0 3px #00ffcc;
+  transition: transform 0.08s ease-out;
+}
+
+.sy-crosshair-line[data-dir='top'],
+.sy-crosshair-line[data-dir='bottom'] {
+  width: 2px;
+  height: 10px;
+  left: -1px;
+}
+
+.sy-crosshair-line[data-dir='left'],
+.sy-crosshair-line[data-dir='right'] {
+  width: 10px;
+  height: 2px;
+  top: -1px;
+}
+
+.sy-crosshair-line[data-dir='top'] { transform: translateY(-8px); }
+.sy-crosshair-line[data-dir='bottom'] { transform: translateY(8px); }
+.sy-crosshair-line[data-dir='left'] { transform: translateX(-8px); }
+.sy-crosshair-line[data-dir='right'] { transform: translateX(8px); }
+
+/* Health bar */
+#sy-health-container {
+  position: absolute;
+  bottom: 40px;
+  left: 40px;
+  width: 220px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#sy-health-fill {
+  height: 100%;
+  width: 100%;
+  background: #00ffaa;
+  transition: width 0.15s ease-out, background-color 0.3s;
+  box-shadow: 0 0 8px rgba(0, 255, 170, 0.4);
+}
+
+#sy-health-text {
+  position: absolute;
+  bottom: 41px;
+  left: 50%;
+  transform: translateX(calc(-50% - 70px + 110px));
+  font-size: 12px;
+  color: #fff;
+  text-shadow: 0 0 4px #000;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* Ammo */
+#sy-ammo-container {
+  position: absolute;
+  bottom: 40px;
+  right: 40px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(0, 255, 204, 0.3);
+  border-radius: 3px;
+  padding: 6px 16px;
+}
+
+#sy-ammo-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: #00ffcc;
+  text-shadow: 0 0 8px rgba(0, 255, 204, 0.5);
+}
+
+/* Loot counter */
+#sy-loot-container {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 170, 0, 0.4);
+  border-radius: 20px;
+  padding: 6px 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#sy-loot-text {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffaa00;
+  text-shadow: 0 0 8px rgba(255, 170, 0, 0.5);
+}
+
+/* Kill counter */
+#sy-kill-container {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(calc(-50% + 110px));
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 60, 60, 0.3);
+  border-radius: 20px;
+  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#sy-kill-counter {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ff6666;
+  text-shadow: 0 0 6px rgba(255, 100, 100, 0.4);
+}
+
+/* Match timer */
+#sy-timer-container {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 4px 12px;
+}
+
+#sy-match-timer {
+  font-size: 14px;
+  color: rgba(200, 220, 255, 0.7);
+}
+
+/* Extraction progress */
+#sy-extraction-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, 60px);
+  text-align: center;
+}
+
+#sy-extraction-bar-bg {
+  width: 200px;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(0, 255, 136, 0.4);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+#sy-extraction-fill {
+  height: 100%;
+  width: 0%;
+  background: #00ff88;
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.6);
+  transition: width 0.1s linear;
+}
+
+#sy-extraction-text {
+  font-size: 13px;
+  color: #00ff88;
+  text-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
+  animation: sy-pulse-text 1s ease-in-out infinite;
+}
+
+@keyframes sy-pulse-text {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Waypoint arrow */
+#sy-waypoint-arrow {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  transition: opacity 0.3s;
+}
+
+.sy-waypoint-chevron {
+  font-size: 28px;
+  color: #00ff88;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+  transition: transform 0.1s;
+}
+
+.sy-waypoint-label {
+  font-size: 10px;
+  color: #00ff88;
+  letter-spacing: 2px;
+}
+
+.sy-waypoint-dist {
+  font-size: 12px;
+  color: rgba(0, 255, 136, 0.7);
+}
+
+/* Click-to-lock prompt */
+#sy-click-prompt {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, 100px);
+  font-size: 14px;
+  color: rgba(200, 220, 255, 0.6);
+  animation: sy-fade-pulse 2s ease-in-out infinite;
+}
+
+@keyframes sy-fade-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.2; }
+}
+
+/* Exit button — small button top-left so the player can bail out to factory */
+#sy-exit-btn {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 60, 60, 0.45);
+  color: #ff8888;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 2px;
+  text-shadow: 0 0 4px rgba(255, 60, 60, 0.5);
+}
+
+#sy-exit-btn:hover {
+  background: rgba(60, 0, 0, 0.8);
+  border-color: #ff6666;
+}

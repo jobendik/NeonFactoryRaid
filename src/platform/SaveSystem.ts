@@ -7,7 +7,7 @@ import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 import type { OperatorId } from '../config/OperatorDefs';
 
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 export type QualityPreset = 'low' | 'medium' | 'high';
 const SAVE_KEY = 'save';
@@ -18,6 +18,16 @@ export interface SaveStats {
   totalScrap: number;
   bestRaid: number;
   killCount: number;
+}
+
+// M25 — separate counter for the 3D Scrapyard mode so the factory UI can
+// surface "best 3D run" / "FPS extractions" without conflating with the
+// top-down raid stats.
+export interface SaveScrapyardStats {
+  runs: number;
+  extracts: number;
+  kills: number;
+  bestLoot: number;
 }
 
 export interface SaveDaily {
@@ -104,6 +114,9 @@ export interface SaveData {
     qualityUpgradeOffered: boolean;
   };
   tutorialDone: boolean;
+  // M25 — 3D Scrapyard mode lifetime stats. Independent of the top-down raid
+  // stats so the factory UI can surface "best 3D run" without conflating.
+  scrapyardStats: SaveScrapyardStats;
   // M11 FTUE tracking. raidsCompleted increments on any raid-end (including
   // tutorial); successfulExtracts only on extract. ftueUnlocks is the
   // progressive-reveal state for the upgrade panel (§5.3).
@@ -167,6 +180,7 @@ export function createDefaultSave(): SaveData {
       qualityUpgradeOffered: false,
     },
     tutorialDone: false,
+    scrapyardStats: { runs: 0, extracts: 0, kills: 0, bestLoot: 0 },
     raidsCompleted: 0,
     successfulExtracts: 0,
     firstCoreCollected: false,
@@ -314,6 +328,15 @@ function migrateV7toV8(v7: MigratingSave): MigratingSave {
   };
 }
 
+// v8 → v9: M25 adds scrapyardStats (FPS Scrapyard mode lifetime counters).
+function migrateV8toV9(v8: MigratingSave): MigratingSave {
+  return {
+    ...v8,
+    version: 9,
+    scrapyardStats: { runs: 0, extracts: 0, kills: 0, bestLoot: 0 },
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -334,13 +357,14 @@ function migrate(raw: unknown): SaveData {
   if (save.version === 5) save = migrateV5toV6(save);
   if (save.version === 6) save = migrateV6toV7(save);
   if (save.version === 7) save = migrateV7toV8(save);
+  if (save.version === 8) save = migrateV8toV9(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 8) save = migrateV8toV9(save);
+  //   if (save.version === 9) save = migrateV9toV10(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

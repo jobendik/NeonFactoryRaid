@@ -25,6 +25,9 @@ export interface RaidEndPayload {
   // Defaults to true server-side if absent; SummaryScene reads this to
   // decide whether the DOUBLE LOOT button is interactive.
   allowDoubleLoot?: boolean;
+  // M25 — set by ScrapyardScene so SummaryScene can badge the run and
+  // redeploy back into 3D mode instead of the top-down raid.
+  scrapyard?: boolean;
 }
 
 export type RaidMode = 'tutorial' | 'normal' | 'dailySeed';

@@ -35,6 +35,9 @@ export class SummaryScene extends Phaser.Scene {
   private tutorial = false;
   private newlyInfested = 0;
   private machinesRestored = 0;
+  // M25 — true when the summary follows a 3D Scrapyard run. Drives a badge
+  // on the title + redeploys back into ScrapyardScene instead of RaidScene.
+  private scrapyard = false;
   // M20 — DOUBLE LOOT availability: false if REVIVE was already shown this
   // raid (§17.3 max-1-rewarded-prompt rule) OR if the raid wasn't a
   // successful extract.
@@ -59,6 +62,7 @@ export class SummaryScene extends Phaser.Scene {
       this.newlyInfested = data.newlyInfested ?? 0;
       this.machinesRestored = data.machinesRestored ?? 0;
       this.allowDoubleLoot = data.allowDoubleLoot !== false;
+      this.scrapyard = data.scrapyard === true;
     }
     this.doubleLootClaimed = false;
     this.doubleLootBg = null;
@@ -86,6 +90,21 @@ export class SummaryScene extends Phaser.Scene {
         strokeThickness: 4,
       })
       .setOrigin(0.5, 0);
+
+    // M25 — Scrapyard mode badge.
+    if (this.scrapyard) {
+      this.add
+        .text(w / 2, h * 0.13, 'SCRAPYARD · 3D', {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: '#c8a4ff',
+          stroke: '#000000',
+          strokeThickness: 3,
+          backgroundColor: '#1a0a2e',
+          padding: { x: 10, y: 4 },
+        })
+        .setOrigin(0.5, 0);
+    }
 
     // Modifier badge: greed mult on extract, penalty notice on fail/collapse.
     if (this.endState === 'extracted' && this.greedMult > 1.0) {
@@ -288,13 +307,16 @@ export class SummaryScene extends Phaser.Scene {
 
   private gotoFactory(): void {
     this.scene.stop('RaidScene');
+    this.scene.stop('ScrapyardScene');
     this.scene.start('FactoryScene');
     this.scene.stop();
   }
 
   private redeploy(): void {
+    const target = this.scrapyard ? 'ScrapyardScene' : 'RaidScene';
     this.scene.stop('RaidScene');
-    this.scene.start('RaidScene');
+    this.scene.stop('ScrapyardScene');
+    this.scene.start(target);
     this.scene.stop();
   }
 }

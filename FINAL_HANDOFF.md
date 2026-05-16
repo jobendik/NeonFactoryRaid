@@ -1,19 +1,23 @@
-# FINAL HANDOFF — Neon Factory Raid (Milestones 0–24)
+# FINAL HANDOFF — Neon Factory Raid (Milestones 0–25)
 
-End of Run D. Game is at the **CrazyGames submission gate** per blueprint
-Appendix C. `npm install && npm run typecheck && npm run build` are green.
-Branch: `claude/review-handoff-continue-eBIzP`.
+End of Run E. Game is at the **CrazyGames submission gate** per blueprint
+Appendix C, plus an optional 3D FPS "Scrapyard" mode (M25) on top of the
+M0–M24 top-down core. `npm install && npm run typecheck && npm run build`
+are green.
 
 ---
 
 ## Build snapshot
 
-- **Production compressed total**: **387 KB** (gzip)
-  - `dist/index.html` — 2.75 KB raw / 1.13 KB gzip
-  - `dist/assets/index-*.js` — 183.78 KB raw / 50.86 KB gzip
-  - `dist/assets/phaser-*.js` — 1,478.57 KB raw / 339.68 KB gzip
-- **Limit**: 10 MB compressed (Appendix C). We're at **~4%** of the cap.
-- 65 modules transformed at build time.
+- **Production compressed total**: **~540 KB** (gzip)
+  - `dist/index.html` — 2.86 KB raw / 1.17 KB gzip
+  - `dist/assets/index-*.css` — 4.56 KB raw / 1.35 KB gzip
+  - `dist/assets/index-*.js` — 772.81 KB raw / 199.49 KB gzip (game code + Three.js)
+  - `dist/assets/phaser-*.js` — 1,478.57 KB raw / 339.68 KB gzip (vendor chunk)
+- **Limit**: 10 MB compressed (Appendix C). We're at **~5.4%** of the cap.
+- 91 modules transformed at build time.
+- Three.js (`^0.184`) bundled into `index-*.js` for the Scrapyard mode;
+  Phaser still drives every other scene.
 
 ## How to do a submission-ready build
 
@@ -63,20 +67,20 @@ For ZIP submission, the contents of `/dist/` go in the archive root.
 | Chrome / Firefox / Edge desktop | ⚠️ | Phaser 3 supports all three; not personally verified on each |
 | Safari iOS / Chrome Android | ⚠️ | Touch path implemented (floating joystick, dash button); not personally verified on devices |
 | Chromebook 4GB @ 30fps | ⚠️ | `QualityManager` auto-detect drops to Low on sustained <40fps; not personally verified on Chromebook |
-| Load size < 10 MB compressed | ✅ | **387 KB** — 4% of cap |
-| First playable < 5s on 4G | ✅ | 387 KB cold load ≈ <2s on 4G |
+| Load size < 10 MB compressed | ✅ | **~540 KB** — 5.4% of cap |
+| First playable < 5s on 4G | ✅ | ~540 KB cold load ≈ <3s on 4G |
 | No console errors in production | ✅ | `BootScene.create` has one informational `console.log('Boot OK')`; no errors or warnings |
 | Mute button accessible | ✅ | `MuteButton` top-right HUD; persists across raid/factory |
 | Pause works without breaking state | ✅ | `ESC` opens `SettingsMenu`; modals pause via `this.scene.pause()` |
 | Settings menu present | ✅ | Volume sliders × 3, Quality preset + Auto-detect, Cosmetics, Achievements, Controls, Credits, Reset Save |
 | `<html lang="en">` | ✅ | Verified in `index.html` (was the `lang="no"` bug from the original Run 0 prototype) |
-| Save migration plan documented | ✅ | v0→v8 chain in `SaveSystem.migrate`; `window.__migrationTest()` dev tool |
+| Save migration plan documented | ✅ | v0→v9 chain in `SaveSystem.migrate`; `window.__migrationTest()` dev tool |
 
 **Items marked ⚠️ require a real device to verify.** They aren't blockers —
 the code path is correct — but a submission-ready release should sanity-check
 each browser/platform before the final upload.
 
-## What's in the build (M0–M24)
+## What's in the build (M0–M25)
 
 ### Core loop (Runs A + B, M0–M14)
 - M0: Vite + Phaser 3 + TypeScript scaffold
@@ -108,6 +112,16 @@ each browser/platform before the final upload.
 - M22: §8.5 milestone effects + player ship + tank armor + HUD pass + parallax + HTML preloader
 - M23: Cosmetics + premium currency + achievements + season scaffolding
 - M24: Submission readiness gate (this document)
+
+### Run E (M25)
+- M25: 3D FPS "Scrapyard" mode — optional secondary game mode. Three.js
+  renderer overlaid on Phaser's canvas; shares the same SaveSystem,
+  Economy, UpgradeEffects, and SDKBridge. Players unlock the violet
+  Scrapyard pad in the factory after their first real raid; entering it
+  swaps to a pointer-locked first-person extraction shooter (pulse rifle,
+  Rusher/Shooter enemies, magnetic loot pickup, 10-second extraction
+  zone). Loot banks back to the same wallet so progression compounds
+  across both modes. Adds ~150 KB gzip (Three.js).
 
 ### File layout (final)
 
@@ -152,12 +166,13 @@ each browser/platform before the final upload.
 ├── scenes/
 │   ├── BootScene.ts         — SDK init, save load, autosave start, route to FTUE or factory
 │   ├── DraftScene.ts        — M15 card-pick overlay
-│   ├── FactoryScene.ts      — factory hub, upgrades, deploy pad, ads, operators, season
-│   ├── HUDScene.ts          — persistent HUD, perf overlay, toasts, ESC handler
+│   ├── FactoryScene.ts      — factory hub, upgrades, deploy pad + M25 Scrapyard pad, ads, operators, season
+│   ├── HUDScene.ts          — persistent HUD, perf overlay, toasts, ESC handler; suppressed during ScrapyardScene
 │   ├── ModalScene.ts        — M20 ad-confirmation modal
 │   ├── PreloadScene.ts      — placeholder
 │   ├── RaidScene.ts         — raid lifecycle, spatial grids, REVIVE, EXTEND RUN, SDK lifecycle
-│   └── SummaryScene.ts      — run-end + DOUBLE LOOT
+│   ├── ScrapyardScene.ts    — M25 3D FPS mode orchestrator (boots Three.js, drives scrapyard systems, hands off to SummaryScene)
+│   └── SummaryScene.ts      — run-end + DOUBLE LOOT; accepts scrapyard payloads
 ├── systems/
 │   ├── AchievementSystem.ts — M23 unlock tracking + 8 achievements
 │   ├── CosmeticSystem.ts    — M23 equip/unlock plumbing
@@ -181,20 +196,34 @@ each browser/platform before the final upload.
 │   ├── VirtualJoystick.ts   — mobile floating joystick
 │   ├── WaveDirector.ts      — spawn director (reads QualityManager.enemyCap)
 │   └── WeaponSystem.ts      — auto-fire (spatial-grid queried)
-└── ui/
-    ├── HUD.ts               — stub
-    ├── Modal.ts             — stub
-    ├── MuteButton.ts        — top-right speaker icon
-    ├── SettingsMenu.ts      — audio + quality + cosmetics + achievements + controls + credits + reset
-    ├── SummaryScreen.ts     — stub
-    └── UpgradeCard.ts       — factory upgrade panel row
+├── ui/
+│   ├── HUD.ts               — stub
+│   ├── Modal.ts             — stub
+│   ├── MuteButton.ts        — top-right speaker icon
+│   ├── SettingsMenu.ts      — audio + quality + cosmetics + achievements + controls + credits + reset
+│   ├── SummaryScreen.ts     — stub
+│   └── UpgradeCard.ts       — factory upgrade panel row
+└── scrapyard/                  — M25 3D FPS mode (Three.js)
+    ├── ScrapyardRenderer.ts    — Three.js renderer, scene, camera, lighting, bloom + OutputPass
+    ├── ScrapyardQuality.ts     — LOW/MEDIUM/HIGH presets, auto-detect via hardwareConcurrency
+    ├── FPSController.ts        — WASD + sprint/crouch/jump + pointer lock + gravity + AABB collision
+    ├── FPSCamera.ts            — mouse look + weapon bob + recoil kick + screen shake
+    ├── ScrapyardArena.ts       — procedural floor/walls/cover/extraction zone + colliders
+    ├── ScrapyardEnemySystem.ts — pooled Rusher/Shooter AI + sphere raycast with headshots
+    ├── ScrapyardWeapon.ts      — pulse rifle: hitscan, mag/reload, spread, recoil, muzzle flash
+    ├── ScrapyardLoot.ts        — pooled loot orbs with burst physics + magnetic vacuum
+    ├── ScrapyardExtraction.ts  — beacon + ring + paused-on-exit timer
+    ├── ScrapyardParticles.ts   — billboard particles + canvas damage numbers
+    ├── ScrapyardAudio.ts       — Web Audio SFX (independent AudioContext)
+    ├── ScrapyardHUD.ts         — DOM HUD overlay (crosshair, HP, ammo, loot, kills, waypoint, extraction bar)
+    └── scrapyard.css           — FPS HUD styles
 ```
 
-### Save schema (v8)
+### Save schema (v9)
 
 ```ts
 {
-  version: 8,
+  version: 9,
   scrap, cores, tokens,                            // currencies
   upgrades: { gen, drone, speed, magnet, damage, luck },
   refinery: { ... },                               // Cyber-Core refinery (post-launch)
@@ -214,6 +243,7 @@ each browser/platform before the final upload.
   lastRaidDate,                                    // M20
   settings: { qualityPreset, qualityAutoDetect, qualityUpgradeOffered },  // M21
   tutorialDone,
+  scrapyardStats: { runs, extracts, kills, bestLoot },  // M25
   raidsCompleted, successfulExtracts,
   firstCoreCollected,
   ftueUnlocks: { ... },                            // M11
@@ -221,8 +251,9 @@ each browser/platform before the final upload.
 }
 ```
 
-Migration chain: v0 → v1 (discard, start fresh) → v2 → v3 → v4 → v5 → v6 → v7 → v8.
-Test with `window.__migrationTest()` in dev tools.
+Migration chain: v0 → v1 (discard, start fresh) → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9.
+v8→v9 adds `scrapyardStats` with all-zero defaults; existing saves keep all
+top-down progress untouched. Test with `window.__migrationTest()` in dev tools.
 
 ---
 
@@ -305,7 +336,7 @@ That's it. No other file changes required. Validate by:
 | **Prestige system** | `first-prestige` achievement deferred | Requires Gen Lv. 25 + 1000 Cores; spec at §10.3 |
 | **Refinery (Cores → permanent multipliers)** | SaveData field exists | Spec at §10.2; build the Refinery UI in factory |
 | **Mission board (contracts)** | Not implemented | Spec at §16.6 |
-| **3D / WebGL upgrade** | Out of scope | Spec at §22.1 explicitly defers to "Phase 2 scale" |
+| **3D / WebGL upgrade** | ✅ Done in M25 | Optional secondary "Scrapyard" mode via Three.js; top-down §22.1 core unchanged |
 
 ### Tuning notes worth revisiting
 
@@ -383,6 +414,40 @@ That's it. No other file changes required. Validate by:
 - `__migrationTest()` exposed on `window` (not in the UI) so QA can
   exercise the migration chain without test infrastructure
 
+### Run E (M25) decisions
+
+- **Scrapyard is a secondary mode, not a replacement.** Blueprint §2.2
+  says "Not a 3D shooter"; the merge respects that by keeping the
+  top-down loop as the default and gating the 3D pad behind 1 real raid
+  so the FTUE stays focused on the polished core.
+- **Phaser + Three.js coexist on separate canvases.** ScrapyardScene
+  hides Phaser's canvas during the 3D run; HUDScene short-circuits when
+  ScrapyardScene is active so the Phaser HUD doesn't double-render over
+  the DOM HUD.
+- **No singletons.** The original MergeThisGame code was vanilla-JS
+  singletons that referenced each other directly (`gameManager.enemySystem`
+  etc.). The TS port replaces that with constructor-injected dependencies
+  + callback hooks (`onKill`, `onLootDrop`, `onCollect`, `onExtract`) so
+  the systems are testable in isolation and the scene owns the wiring.
+- **Shared progression via real plumbing, not duplication.** Loot from
+  the 3D mode banks through `Economy.bankLoot()` — same wallet, same
+  daily-quest hook, same offline-production target. Upgrade stats are
+  projected onto FPS units in `ScrapyardScene.create()` (HP delta from
+  `UpgradeEffects.playerMaxHp()`, weapon damage from
+  `weaponDamageLevel × Balance.weapon.damagePerLevel`, magnet radius
+  scaled from 2D px to 3D world units).
+- **Voluntary "EXIT TO FACTORY" ends as `collapsed`.** Same 50% unbanked
+  penalty as a top-down failed extract — preserves the risk model rather
+  than offering a free escape hatch.
+- **DOM HUD over Phaser HUD for the 3D mode.** Crosshair, vignette, and
+  waypoint arrow are easier and faster in DOM than projecting through
+  Three.js into a Phaser scene. CSS is injected once via a side-effect
+  import in `ScrapyardScene.ts` (Vite handles bundling).
+- **No greed/draft/operator port.** Scrapyard runs with a single fixed
+  weapon and no in-run drafting; the rich top-down depth lives in
+  RaidScene. Keeps Scrapyard as a quick "raid of a different shape"
+  rather than a parallel content stack to maintain.
+
 ---
 
 ## Next-actions checklist (post-launch)
@@ -405,6 +470,30 @@ That's it. No other file changes required. Validate by:
 [ ] Backend leaderboard (replaces local-only daily seed history)
 [ ] Address tuning notes above (Drone Multiplier dead pick, Magnet Storm
     differentiation, Lucky visibility, Heal-on-Pickup numbers)
+```
+
+### Scrapyard (M25) follow-ups
+
+```
+[ ] In-mode tutorial / first-time prompts — pointer lock + WASD + reload
+    cues. Currently a one-line "CLICK TO LOCK CURSOR" overlay only.
+[ ] Mouse sensitivity slider in SettingsMenu (FPSCamera.sensitivity is
+    hardcoded at 0.002).
+[ ] Mobile fallback — pointer lock is desktop-only. Either hide the
+    Scrapyard pad on touch devices or add a virtual look-stick.
+[ ] Wire daily-quest events (enemy kills, extractions) from
+    ScrapyardScene so quests progress in 3D mode too. Currently
+    only banking loot via Economy.bankLoot() composes; kill / extract
+    quests don't increment from the FPS run.
+[ ] Operator stat mods aren't fully projected onto FPS systems
+    (drone count, bonusWeaponTargets, etc.). Pulse and Vanta apply
+    their `apply()` to RaidScene state only.
+[ ] Factory "best Scrapyard run" stat readout. `scrapyardStats` is
+    persisted but not surfaced in the factory UI yet.
+[ ] Greed / extraction-decay analog for the 3D mode (FPS extraction is
+    a flat 10 s).
+[ ] Bloom toggle in the SettingsMenu — currently driven only by the
+    Scrapyard quality auto-detect.
 ```
 
 **Ship it.**

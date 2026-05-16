@@ -377,10 +377,26 @@ export const Balance = {
       { x: -380, y: 140 },
     ] as const,
     deployPad: { x: 460, y: 0, radius: 70, holdSec: 0.4 },
+    // Secondary deploy pad for the 3D FPS Scrapyard mode. Sits below the
+    // primary deploy pad so the player has a clear "two ways to play" choice.
+    scrapyardPad: { x: 460, y: 220, radius: 60, holdSec: 0.5 },
     generatorSize: 64,
     generatorDropOffsetMin: 36,
     generatorDropOffsetMax: 80,
     generatorPulseHz: 0.9,
+  },
+  // 3D first-person Scrapyard mode tuning. Most of the per-system constants
+  // live in the scrapyard/ modules themselves (Three.js wants the literal
+  // numbers near the geometry), but anything that is balance-relevant or
+  // shared across systems lives here so designers can tune in one place.
+  scrapyard: {
+    extractionTime: 10,
+    arenaSize: 48,
+    enemyMaxOnScreen: 30,
+    // Unlock gate: scrapyard pad is hidden until the player has done at
+    // least this many real raids. Keeps the FTUE focused on the polished
+    // top-down loop (M0-M24) before surfacing the secondary 3D mode.
+    unlockAfterRaids: 1,
   },
 } as const;
 

@@ -54,6 +54,18 @@ export class FactoryScene extends Phaser.Scene {
   private padFill!: Phaser.GameObjects.Graphics;
   private deployHold = 0;
   private deployState: DeployState = 'idle';
+  // M25 — Secondary deploy pad for the 3D FPS Scrapyard mode. Mirrors the
+  // primary pad but launches ScrapyardScene instead of RaidScene. Hidden
+  // until the player has finished at least Balance.scrapyard.unlockAfterRaids
+  // real raids so the FTUE isn't fragmented.
+  private scrapPadX = Balance.factory.scrapyardPad.x;
+  private scrapPadY = Balance.factory.scrapyardPad.y;
+  private scrapPadRadius = Balance.factory.scrapyardPad.radius;
+  private scrapPadBase: Phaser.GameObjects.Graphics | null = null;
+  private scrapPadFill: Phaser.GameObjects.Graphics | null = null;
+  private scrapPadLabel: Phaser.GameObjects.Text | null = null;
+  private scrapDeployHold = 0;
+  private scrapDeployState: DeployState = 'idle';
   private drones: Drone[] = [];
   private upgradeCards: UpgradeCard[] = [];
   private milestoneVisuals: Phaser.GameObjects.GameObject[] = [];
@@ -101,6 +113,7 @@ export class FactoryScene extends Phaser.Scene {
 
     this.drawBackground();
     this.drawPad();
+    this.drawScrapyardPad();
 
     this.player = new Player(this, 0, 0);
     this.cameras.main.startFollow(
@@ -226,6 +239,7 @@ export class FactoryScene extends Phaser.Scene {
     }
 
     this.tickDeployPad(dt);
+    this.tickScrapyardPad(dt);
     this.tickAdPanel();
   }
 
@@ -248,6 +262,12 @@ export class FactoryScene extends Phaser.Scene {
     this.deployPromptTween = null;
     this.deployPrompt?.destroy();
     this.deployPrompt = null;
+    this.scrapPadBase?.destroy();
+    this.scrapPadBase = null;
+    this.scrapPadFill?.destroy();
+    this.scrapPadFill = null;
+    this.scrapPadLabel?.destroy();
+    this.scrapPadLabel = null;
     this.destroyOperatorPanel();
     this.destroyQuestPanel();
     this.destroyDailySeedAndLeaderboard();
@@ -527,6 +547,37 @@ export class FactoryScene extends Phaser.Scene {
     this.drawPadFill();
   }
 
+  // M25 — Scrapyard (3D FPS) deploy pad. Unlocked once the player has done
+  // at least Balance.scrapyard.unlockAfterRaids real raids, so the FTUE flow
+  // can finish on the top-down loop first.
+  private isScrapyardUnlocked(): boolean {
+    const save = saveSystem.get();
+    if (!save.tutorialDone) return false;
+    const realRaids = Math.max(0, save.raidsCompleted - 1);
+    return realRaids >= Balance.scrapyard.unlockAfterRaids;
+  }
+
+  private tickScrapyardPad(dt: number): void {
+    if (!this.isScrapyardUnlocked()) return;
+    if (this.scrapDeployState === 'launching') return;
+    const dx = this.player.x - this.scrapPadX;
+    const dy = this.player.y - this.scrapPadY;
+    const onPad = Math.hypot(dx, dy) <= this.scrapPadRadius;
+    if (onPad) {
+      this.scrapDeployHold = Math.min(Balance.factory.scrapyardPad.holdSec, this.scrapDeployHold + dt);
+      this.scrapDeployState = 'holding';
+      if (this.scrapDeployHold >= Balance.factory.scrapyardPad.holdSec) {
+        this.scrapDeployState = 'launching';
+        this.scene.start('ScrapyardScene');
+        return;
+      }
+    } else {
+      this.scrapDeployHold = Math.max(0, this.scrapDeployHold - dt * 2);
+      if (this.scrapDeployHold <= 0) this.scrapDeployState = 'idle';
+    }
+    this.drawScrapyardPadFill();
+  }
+
   private drawBackground(): void {
     const wb = Balance.player.worldBounds;
     const grid = this.add.graphics();
@@ -581,6 +632,48 @@ export class FactoryScene extends Phaser.Scene {
     this.padFill.beginPath();
     this.padFill.arc(this.padX, this.padY, this.padRadius * 0.82, start, end, false);
     this.padFill.strokePath();
+  }
+
+  // M25 — Scrapyard pad rendering. Uses a violet ring to distinguish it
+  // visually from the green primary deploy pad. Hidden until unlocked.
+  private drawScrapyardPad(): void {
+    if (!this.isScrapyardUnlocked()) return;
+    const ringColor = 0xa76cff;
+    this.scrapPadBase = this.add.graphics();
+    this.scrapPadBase.setDepth(2);
+    this.scrapPadBase.fillStyle(ringColor, 0.12);
+    this.scrapPadBase.fillCircle(this.scrapPadX, this.scrapPadY, this.scrapPadRadius);
+    this.scrapPadBase.lineStyle(3, ringColor, 0.85);
+    this.scrapPadBase.strokeCircle(this.scrapPadX, this.scrapPadY, this.scrapPadRadius);
+    this.scrapPadBase.lineStyle(1, ringColor, 0.4);
+    this.scrapPadBase.strokeCircle(this.scrapPadX, this.scrapPadY, this.scrapPadRadius * 0.55);
+
+    this.scrapPadFill = this.add.graphics();
+    this.scrapPadFill.setDepth(3);
+
+    this.scrapPadLabel = this.add
+      .text(this.scrapPadX, this.scrapPadY + this.scrapPadRadius + 18, 'ENTER SCRAPYARD (3D)', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#c8a4ff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(3);
+  }
+
+  private drawScrapyardPadFill(): void {
+    if (!this.scrapPadFill) return;
+    this.scrapPadFill.clear();
+    if (this.scrapDeployHold <= 0) return;
+    const ratio = this.scrapDeployHold / Balance.factory.scrapyardPad.holdSec;
+    this.scrapPadFill.lineStyle(6, 0xa76cff, 1);
+    const start = -Math.PI / 2;
+    const end = start + ratio * Math.PI * 2;
+    this.scrapPadFill.beginPath();
+    this.scrapPadFill.arc(this.scrapPadX, this.scrapPadY, this.scrapPadRadius * 0.82, start, end, false);
+    this.scrapPadFill.strokePath();
   }
 
   // §11 operator picker. Pinned to the viewport (scroll-factor 0) along the

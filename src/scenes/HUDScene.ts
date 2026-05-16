@@ -459,6 +459,15 @@ export class HUDScene extends Phaser.Scene {
       this.renderPerfOverlay(fps);
     }
 
+    // M25 — Scrapyard 3D mode renders its own DOM HUD; suppress the Phaser
+    // HUD entirely while it is active so we don't double-render readouts.
+    const scrapyard = this.scene.get('ScrapyardScene');
+    if (scrapyard && scrapyard.scene.isActive()) {
+      this.clearRaidHud();
+      this.fpsText.setText('');
+      return;
+    }
+
     const raid = this.scene.get('RaidScene') as RaidScene | undefined;
     if (raid && raid.scene.isActive()) {
       this.renderRaid(raid);
