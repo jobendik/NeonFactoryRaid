@@ -36,6 +36,19 @@ export type DailyCrateReward = { kind: 'scrap'; amount: number } | { kind: 'core
 // rather than save data because it's transient across raid boundaries.
 let promptShownThisRaid = false;
 
+// §17.6 midgame ad gating — purely session-scoped state.
+//   sessionStartMs    : timestamp of first call, used for the "never within
+//                       60s of session start" rule.
+//   raidReturnCount   : count of raids that returned to factory this session;
+//                       midgame fires every Nth.
+//   lastMidgameMs     : last successful midgame request (cap one per 90s).
+const sessionStartMs = Date.now();
+let raidReturnCount = 0;
+let lastMidgameMs = 0;
+const MIDGAME_SESSION_GUARD_MS = 60_000;
+const MIDGAME_MIN_INTERVAL_MS = 90_000;
+const MIDGAME_RAID_INTERVAL = 3;
+
 export const AdManager = {
   // Called by RaidScene.create() to reset the per-raid prompt mutex.
   resetForRaid(): void {
@@ -147,5 +160,41 @@ export const AdManager = {
       return `${Strings.adRewardScrapPrefix}${reward.amount}${Strings.adRewardScrapSuffix}`;
     }
     return Strings.adRewardCore;
+  },
+
+  // §17.6 — non-rewarded midgame interstitial when returning to factory from a
+  // raid. Caller must pass:
+  //   raidEndState        : 'extracted' | 'failed' | 'collapsed'
+  //   doubleLootClaimed   : true if the summary's DOUBLE LOOT already showed
+  //                         a rewarded ad (don't double-ad)
+  // We fire midgame in two cases per spec:
+  //   1) Every 3rd return to factory.
+  //   2) After a failure summary where no rewarded ad was watched.
+  // Both gates honor "never within 60 s of session start" and a 90 s minimum
+  // interval so back-to-back failures can't chain ads.
+  async maybeRequestMidgame(opts: {
+    raidEndState: 'extracted' | 'failed' | 'collapsed';
+    doubleLootClaimed: boolean;
+    tutorial: boolean;
+  }): Promise<void> {
+    if (opts.tutorial) return;
+    raidReturnCount += 1;
+    const now = Date.now();
+    if (now - sessionStartMs < MIDGAME_SESSION_GUARD_MS) return;
+    if (now - lastMidgameMs < MIDGAME_MIN_INTERVAL_MS) return;
+
+    const failureNoRewarded =
+      (opts.raidEndState === 'failed' || opts.raidEndState === 'collapsed') &&
+      !opts.doubleLootClaimed;
+    const everyThird = raidReturnCount % MIDGAME_RAID_INTERVAL === 0;
+    if (!failureNoRewarded && !everyThird) return;
+
+    lastMidgameMs = now;
+    SDKBridge.gameplayStop();
+    try {
+      await SDKBridge.requestMidgame();
+    } catch {
+      // Midgame ads are best-effort.
+    }
   },
 };

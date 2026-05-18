@@ -1,6 +1,8 @@
 import { Balance } from '../config/Balance';
 import { saveSystem } from '../platform/SaveSystem';
 import { InfestationSystem } from './InfestationSystem';
+import { RefinerySystem } from './RefinerySystem';
+import { RetentionSystem } from './RetentionSystem';
 
 // EconomySystem centralizes the few rules that touch the player wallet:
 //   - SPM formula per blueprint §8.7
@@ -32,7 +34,19 @@ export const Economy = {
     const boostActive = opts?.boostActive ?? save.adState.factoryBoostActiveUntilMs > Date.now();
     const boost = boostActive ? Balance.economy.factoryBoostMult : 1;
     const infest = clampInfestation(opts?.infestationRatio ?? InfestationSystem.getInfestationRatio());
-    return Balance.economy.spm.base * genLevel * (1 + droneLevel * Balance.economy.spm.drone) * boost * (1 - infest);
+    // Refinery + prestige multipliers compose so offline production benefits
+    // from Scrap Catalysts and Cyber-Cores too, not just raid loot.
+    const globalMult =
+      RefinerySystem.scrapMult() *
+      (1 + save.prestige.cyberCores * Balance.prestige.cyberCoreBonus);
+    return (
+      Balance.economy.spm.base *
+      genLevel *
+      (1 + droneLevel * Balance.economy.spm.drone) *
+      boost *
+      (1 - infest) *
+      globalMult
+    );
   },
 
   // Seconds between successive scrap drops at the current SPM.
@@ -44,7 +58,16 @@ export const Economy = {
 
   bankLoot(scrap: number, cores: number): void {
     const save = saveSystem.get();
-    save.scrap += Math.max(0, Math.floor(scrap));
+    // Apply Refinery + Cyber-Core + retention multipliers to banked Scrap.
+    // Cores are not multiplied — they're rare-drop currency the player
+    // earns directly. Retention multipliers (comeback bonus, DOUBLE
+    // PAYDAY) stack multiplicatively so the rare events feel genuinely
+    // exceptional rather than diluted by background progression.
+    const globalMult =
+      RefinerySystem.scrapMult() *
+      (1 + save.prestige.cyberCores * Balance.prestige.cyberCoreBonus) *
+      RetentionSystem.scrapMultiplier();
+    save.scrap += Math.max(0, Math.floor(scrap * globalMult));
     save.cores += Math.max(0, Math.floor(cores));
   },
 

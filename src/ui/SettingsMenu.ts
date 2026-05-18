@@ -27,7 +27,7 @@ interface SliderHandle {
 }
 
 const PANEL_W = 420;
-const PANEL_H = 600;
+const PANEL_H = 680;
 const ROW_Y_GAP = 56;
 const SLIDER_W = 240;
 const SLIDER_H = 14;
@@ -105,10 +105,14 @@ export class SettingsMenu {
     // M21 — quality preset row + auto-detect toggle below the audio sliders.
     this.buildQualityRow(80 + channels.length * ROW_Y_GAP + 10);
 
+    // Suggestions audit — reduced-motion toggle + Scrapyard mouse sensitivity
+    // slider. Stacked under the quality row.
+    this.buildAccessibilityRow(80 + channels.length * ROW_Y_GAP + 140);
+
     // M23 — cosmetics + achievements menu buttons. Both open sub-modals;
     // the SettingsMenu stays beneath them so closing the sub-modal returns
     // the player here.
-    const subY = 80 + channels.length * ROW_Y_GAP + 130;
+    const subY = 80 + channels.length * ROW_Y_GAP + 210;
     this.buildSubMenuButton(PANEL_W / 4, subY, Strings.cosmeticsMenuButton, () =>
       this.openCosmeticsModal(),
     );
@@ -151,6 +155,7 @@ export class SettingsMenu {
     this.dragHandle = null;
     this.sliders = [];
     this.qualityRowObjects = [];
+    this.accessibilityRowObjects = [];
     this.closeSubModal();
     this.root?.destroy(true);
     this.root = null;
@@ -177,6 +182,127 @@ export class SettingsMenu {
       .setOrigin(0.5);
     this.root.add(bg);
     this.root.add(labelText);
+  }
+
+  // Suggestions audit — reduced motion toggle + Scrapyard mouse sensitivity
+  // slider. Stored on save.settings; read by callers via QualityManager
+  // (motion) and FPSCamera (sensitivity).
+  private accessibilityRowObjects: Phaser.GameObjects.GameObject[] = [];
+  private buildAccessibilityRow(y: number): void {
+    const scene = this.scene;
+    if (!this.root) return;
+    for (const o of this.accessibilityRowObjects) o.destroy();
+    this.accessibilityRowObjects = [];
+
+    const labelX = (PANEL_W - SLIDER_W) / 2;
+    const save = saveSystem.get();
+    const motionOn = save.settings.reducedMotion === true;
+
+    // Reduced-motion toggle row.
+    const motionBg = scene.add
+      .rectangle(labelX, y, 18, 18, motionOn ? 0x22f6ff : 0x222a36, 1)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.7)
+      .setInteractive({ useHandCursor: true });
+    if (motionOn) {
+      const check = scene.add
+        .text(labelX + 9, y + 9, '✓', {
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          color: '#000000',
+        })
+        .setOrigin(0.5);
+      this.root.add(check);
+      this.accessibilityRowObjects.push(check);
+    }
+    const motionLabel = scene.add
+      .text(labelX + 28, y + 9, 'REDUCED MOTION', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#88a0a8',
+      })
+      .setOrigin(0, 0.5);
+    motionBg.on('pointerdown', () => {
+      QualityManager.setReducedMotion(!motionOn);
+      void saveSystem.persist();
+      this.buildAccessibilityRow(y);
+    });
+    this.root.add(motionBg);
+    this.root.add(motionLabel);
+    this.accessibilityRowObjects.push(motionBg);
+    this.accessibilityRowObjects.push(motionLabel);
+
+    // Scrapyard mouse sensitivity slider — only meaningful on desktop, but
+    // we always render the row so saves persist regardless of platform.
+    const sensY = y + 30;
+    const sensLabel = scene.add.text(labelX, sensY, '3D MOUSE SENS', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      color: '#88a0a8',
+    });
+    this.root.add(sensLabel);
+    this.accessibilityRowObjects.push(sensLabel);
+
+    const trackY = sensY + 16;
+    const trackBg = scene.add
+      .rectangle(labelX, trackY, SLIDER_W, SLIDER_H, 0x222a36, 1)
+      .setOrigin(0, 0)
+      .setStrokeStyle(1, 0xffffff, 0.4);
+    this.root.add(trackBg);
+    this.accessibilityRowObjects.push(trackBg);
+
+    const sensMin = 0.25;
+    const sensMax = 3.0;
+    const current = Math.max(sensMin, Math.min(sensMax, save.settings.scrapyardMouseSensitivity));
+    const ratio = (current - sensMin) / (sensMax - sensMin);
+
+    const fill = scene.add
+      .rectangle(labelX + 1, trackY + 1, Math.max(0, SLIDER_W * ratio - 2), SLIDER_H - 2, 0xa76cff, 1)
+      .setOrigin(0, 0);
+    this.root.add(fill);
+    this.accessibilityRowObjects.push(fill);
+
+    const knob = scene.add
+      .rectangle(labelX + SLIDER_W * ratio - KNOB_W / 2, trackY - 3, KNOB_W, SLIDER_H + 6, 0xffffff, 1)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    this.root.add(knob);
+    this.accessibilityRowObjects.push(knob);
+
+    const valueText = scene.add
+      .text(labelX + SLIDER_W + 12, trackY + SLIDER_H / 2, `${current.toFixed(2)}x`, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffffff',
+      })
+      .setOrigin(0, 0.5);
+    this.root.add(valueText);
+    this.accessibilityRowObjects.push(valueText);
+
+    let dragging = false;
+    knob.on('pointerdown', () => {
+      dragging = true;
+    });
+    const onMove = (pointer: Phaser.Input.Pointer): void => {
+      if (!dragging || !this.root) return;
+      const localX = pointer.x - this.root.x - labelX;
+      const r = Math.max(0, Math.min(1, localX / SLIDER_W));
+      const v = sensMin + r * (sensMax - sensMin);
+      save.settings.scrapyardMouseSensitivity = v;
+      knob.x = labelX + SLIDER_W * r - KNOB_W / 2;
+      fill.setSize(Math.max(0, SLIDER_W * r - 2), SLIDER_H - 2);
+      valueText.setText(`${v.toFixed(2)}x`);
+    };
+    const onUp = (): void => {
+      if (dragging) void saveSystem.persist();
+      dragging = false;
+    };
+    scene.input.on('pointermove', onMove);
+    scene.input.on('pointerup', onUp);
+    knob.on('destroy', () => {
+      scene.input.off('pointermove', onMove);
+      scene.input.off('pointerup', onUp);
+    });
   }
 
   // M21 — quality preset selector + auto-detect toggle (§24.3 / §24.4).

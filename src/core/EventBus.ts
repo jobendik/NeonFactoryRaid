@@ -61,6 +61,9 @@ export const Events = {
   OPERATOR_UNLOCKED: 'operator:unlocked',
   QUALITY_CHANGED: 'quality:changed',
   SEASON_TIER_REACHED: 'season:tier-reached',
+  // Suggestions audit — emitted by Player.dash() so cards (Nova Dash) and
+  // analytics can react without polling.
+  PLAYER_DASHED: 'player:dashed',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events];

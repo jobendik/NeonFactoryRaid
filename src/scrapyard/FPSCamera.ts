@@ -5,12 +5,16 @@
  */
 
 import * as THREE from 'three';
+import { saveSystem } from '../platform/SaveSystem';
+
+const BASE_SENSITIVITY = 0.002;
 
 export class FPSCamera {
-  // Mouse look
+  // Mouse look. Base * user-configured multiplier; suggestions audit added
+  // a slider in SettingsMenu that writes saveSystem.settings.scrapyardMouseSensitivity.
   private _yaw = 0;
   private _pitch = 0;
-  sensitivity = 0.002;
+  sensitivity = BASE_SENSITIVITY;
   pitchLimit = Math.PI / 2 - 0.05; // ~85 degrees
 
   // Weapon bob
@@ -43,6 +47,9 @@ export class FPSCamera {
 
   /** Initialize mouse move listener. */
   init(): void {
+    // Apply user-configured sensitivity multiplier (1.0 default).
+    const userMult = saveSystem.get().settings?.scrapyardMouseSensitivity ?? 1.0;
+    this.sensitivity = BASE_SENSITIVITY * userMult;
     document.addEventListener('mousemove', this._onMouseMoveBound);
   }
 

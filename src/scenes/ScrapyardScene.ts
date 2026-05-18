@@ -4,6 +4,7 @@ import { Economy } from '../systems/EconomySystem';
 import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
 import { SDKBridge } from '../platform/SDKBridge';
+import { bus, Events } from '../core/EventBus';
 import type { RaidEndPayload, RaidEndState } from '../core/types';
 
 import { ScrapyardRenderer } from '../scrapyard/ScrapyardRenderer';
@@ -104,6 +105,12 @@ export class ScrapyardScene extends Phaser.Scene {
     this.enemies.reset(this.arena.getSpawnPoints());
     this.enemies.onKill = (): void => {
       this.killCount++;
+      // Suggestions audit: fire ENEMY_KILLED so daily quests / missions /
+      // achievements progress from Scrapyard runs too. No kind data — the
+      // FPS enemies don't map onto the top-down EnemyKind taxonomy, so
+      // mission rules that key on kind (e.g., killSwarmers) won't tick from
+      // 3D. Generic "kill 50 enemies" quests will.
+      bus.emit(Events.ENEMY_KILLED, { kind: 'fps' });
     };
     this.enemies.onLootDrop = (pos, count): void => this.loot.spawnLoot(pos, count);
 
@@ -124,7 +131,12 @@ export class ScrapyardScene extends Phaser.Scene {
     this.extraction = new ScrapyardExtraction(this.renderer3D.scene, this.fpsCtrl, this.audio3D);
     this.extraction.init();
     this.extraction.reset(this.arena.getExtractionPosition());
-    this.extraction.onExtract = (): void => this.finishMatch('extracted');
+    this.extraction.onExtract = (): void => {
+      // Fire EXTRACTION_COMPLETE so daily-quest "extract 2 times today"
+      // progresses from FPS extractions.
+      bus.emit(Events.EXTRACTION_COMPLETE);
+      this.finishMatch('extracted');
+    };
     this.extraction.onZoneChange = (inside): void => {
       this.state = inside ? 'EXTRACTING' : 'IN_MATCH';
     };

@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { PARTICLE_TEXTURE_KEY } from '../systems/ParticleEffects';
+import { applyGlow } from '../systems/NeonFX';
 import { saveSystem } from '../platform/SaveSystem';
 import type { Rng } from '../core/Rng';
 
@@ -19,6 +20,7 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
   value = 1;
   private body_!: Phaser.Physics.Arcade.Body;
   private age = 0;
+  private glowApplied = false;
   // M22 §8.5 Magnet Lv. 5: pickups briefly orbit the player before final
   // collection. orbitTimer counts up while in orbit phase; once it exceeds
   // orbitDurationSec, the pickup beelines and is collected as usual.
@@ -34,12 +36,17 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.body_ = this.body as Phaser.Physics.Arcade.Body;
-    this.body_.setCircle(7, 1, 1);
+    // Texture is up to 28px (Core); body radius 7, offset (5,5) for the
+    // 24px Scrap texture centers around the cube. Cores resize automatically
+    // because Phaser keeps the body offset relative to the active texture's
+    // bounds — recompute on spawn() if we add per-type radii later.
+    this.body_.setCircle(7, 5, 5);
     this.setActive(false).setVisible(false);
     this.body_.enable = false;
   }
 
   spawn(x: number, y: number, type: PickupType, value = 1, rng: Rng | null = null): void {
+    const typeChanged = this.type !== type || !this.glowApplied;
     this.type = type;
     this.value = Math.max(1, value);
     this.setTexture(type === 'scrap' ? SCRAP_TEXTURE_KEY : CORE_TEXTURE_KEY);
@@ -49,6 +56,12 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
     this.setAlpha(1);
     this.age = 0;
     this.orbitTimer = 0;
+    if (typeChanged) {
+      const fx = (this as unknown as { preFX?: { clear?: () => void } }).preFX;
+      fx?.clear?.();
+      applyGlow(this, type === 'scrap' ? Balance.colors.scrap : Balance.colors.core, 7, 1, 0.18);
+      this.glowApplied = true;
+    }
 
     const angle = rng ? rng.next() * Math.PI * 2 : Math.random() * Math.PI * 2;
     const speed = rng
@@ -168,37 +181,77 @@ export class Pickup extends Phaser.Physics.Arcade.Sprite {
 
   static ensureTextures(scene: Phaser.Scene): void {
     if (!scene.textures.exists(SCRAP_TEXTURE_KEY)) {
-      const dim = 16;
-      const g = scene.add.graphics();
-      g.fillStyle(Balance.colors.scrap, 1);
-      g.lineStyle(2, 0xffffff, 0.85);
-      const r = 5;
-      g.fillRect(dim / 2 - r, dim / 2 - r, r * 2, r * 2);
-      g.strokeRect(dim / 2 - r, dim / 2 - r, r * 2, r * 2);
-      g.generateTexture(SCRAP_TEXTURE_KEY, dim, dim);
-      g.destroy();
+      const dim = 24;
+      const tex = scene.textures.createCanvas(SCRAP_TEXTURE_KEY, dim, dim);
+      if (tex) {
+        const ctx = tex.context;
+        const cx = dim / 2;
+        const cy = dim / 2;
+        const r = 5;
+        // Cyan halo
+        const halo = ctx.createRadialGradient(cx, cy, 1, cx, cy, cx);
+        halo.addColorStop(0, 'rgba(34, 246, 255, 0.85)');
+        halo.addColorStop(0.5, 'rgba(34, 246, 255, 0.35)');
+        halo.addColorStop(1, 'rgba(34, 246, 255, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(0, 0, dim, dim);
+        // Cube body with shine
+        const body = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+        body.addColorStop(0, '#e3ffff');
+        body.addColorStop(0.5, '#22f6ff');
+        body.addColorStop(1, '#0e7a8a');
+        ctx.fillStyle = body;
+        ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(cx - r + 0.5, cy - r + 0.5, r * 2 - 1, r * 2 - 1);
+        // Highlight pip
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.fillRect(cx - r + 1, cy - r + 1, 2, 2);
+        tex.refresh();
+      }
     }
     if (!scene.textures.exists(CORE_TEXTURE_KEY)) {
-      const dim = 18;
-      const g = scene.add.graphics();
-      g.fillStyle(Balance.colors.core, 1);
-      g.lineStyle(2, 0xffffff, 0.85);
-      const cx = dim / 2;
-      const cy = dim / 2;
-      const r = dim / 2 - 2;
-      g.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = -Math.PI / 2 + (i / 6) * Math.PI * 2;
-        const px = cx + Math.cos(a) * r;
-        const py = cy + Math.sin(a) * r;
-        if (i === 0) g.moveTo(px, py);
-        else g.lineTo(px, py);
+      const dim = 28;
+      const tex = scene.textures.createCanvas(CORE_TEXTURE_KEY, dim, dim);
+      if (tex) {
+        const ctx = tex.context;
+        const cx = dim / 2;
+        const cy = dim / 2;
+        const r = 8;
+        // Gold halo
+        const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, cx);
+        halo.addColorStop(0, 'rgba(255, 215, 90, 0.85)');
+        halo.addColorStop(0.5, 'rgba(255, 215, 90, 0.35)');
+        halo.addColorStop(1, 'rgba(255, 215, 90, 0)');
+        ctx.fillStyle = halo;
+        ctx.fillRect(0, 0, dim, dim);
+        // Hex body gradient
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = -Math.PI / 2 + (i / 6) * Math.PI * 2;
+          const px = cx + Math.cos(a) * r;
+          const py = cy + Math.sin(a) * r;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        const body = ctx.createRadialGradient(cx - 2, cy - 2, 0, cx, cy, r);
+        body.addColorStop(0, '#ffffff');
+        body.addColorStop(0.35, '#ffe48f');
+        body.addColorStop(1, '#a37115');
+        ctx.fillStyle = body;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Bright pip in center
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+        tex.refresh();
       }
-      g.closePath();
-      g.fillPath();
-      g.strokePath();
-      g.generateTexture(CORE_TEXTURE_KEY, dim, dim);
-      g.destroy();
     }
   }
 }

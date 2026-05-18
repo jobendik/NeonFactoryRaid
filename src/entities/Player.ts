@@ -5,6 +5,8 @@ import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { sfxDash, sfxPlayerHurt, sfxPlayerDeath, sfxShieldGrant } from '../audio/sfx';
 import { PARTICLE_TEXTURE_KEY } from '../systems/ParticleEffects';
 import { CosmeticSystem } from '../systems/CosmeticSystem';
+import { QualityManager } from '../systems/QualityManager';
+import { applyGlow } from '../systems/NeonFX';
 import type { RunMods } from '../systems/RunMods';
 
 export const PLAYER_TEXTURE_KEY = 'player-ship';
@@ -56,9 +58,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.setOrigin(0.5);
     this.body_ = this.body as Phaser.Physics.Arcade.Body;
     this.body_.setCollideWorldBounds(true);
-    // Circular hit body slightly tighter than the new 64px sprite (was 48).
-    // Offsets match the texture's center.
-    this.body_.setCircle(18, 14, 14);
+    // Circular hit body centered in the 96px sprite. Offsets place the body
+    // (radius 18) at the texture's center: 30 + 18 = 48.
+    this.body_.setCircle(18, 30, 30);
     // Texture is 64 — center the body offset accordingly. setCircle's offset
     // is from the top-left of the body box, which Phaser sizes from the
     // sprite's render size.
@@ -73,6 +75,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     // M23 — apply equipped ship-skin tint. 'skin-default' uses 0xffffff
     // (a no-op tint) so unmodified ships render with their texture color.
     this.setTint(CosmeticSystem.getEquippedSkinColor());
+    // Stronger glow — outer ring at 10 plus a bright inner core at 2 makes
+    // the ship pop against busy battlefields without losing silhouette.
+    applyGlow(this, Balance.colors.player, 10, 2, 0.2);
   }
 
   // Create the thruster emitter once per Player. Idle by default; tickThruster
@@ -102,45 +107,116 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
 
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(PLAYER_TEXTURE_KEY)) return;
-    const size = 64;
-    const g = scene.add.graphics();
-    // M22 wedge-ship silhouette per §19.3. Larger texture for legibility at
-    // mobile size; bright cyan body with white outline, a cooler-cyan inner
-    // body line for depth, and a small yellow nose accent that catches the
-    // dash-tint without dominating the resting silhouette.
-    g.lineStyle(3, Balance.colors.playerOutline, 1);
-    g.fillStyle(Balance.colors.player, 1);
-    const cy = size * 0.5;
-    const noseX = size * 0.94;
-    const tailY = size * 0.85;
-    const tailY2 = size * 0.15;
-    // Outer hull
-    g.beginPath();
-    g.moveTo(noseX, cy);
-    g.lineTo(size * 0.12, tailY2);
-    g.lineTo(size * 0.30, cy);
-    g.lineTo(size * 0.12, tailY);
-    g.closePath();
-    g.fillPath();
-    g.strokePath();
-    // Inner cockpit line (subtle, slightly darker cyan)
-    g.lineStyle(2, 0x14a8c2, 0.85);
-    g.beginPath();
-    g.moveTo(noseX - 4, cy);
-    g.lineTo(size * 0.36, cy - 6);
-    g.lineTo(size * 0.36, cy + 6);
-    g.closePath();
-    g.strokePath();
-    // Yellow nose tip — small triangle inset from the prow.
-    g.fillStyle(Balance.colors.playerDashAccent, 1);
-    g.beginPath();
-    g.moveTo(noseX - 1, cy);
-    g.lineTo(noseX - 9, cy - 4);
-    g.lineTo(noseX - 9, cy + 4);
-    g.closePath();
-    g.fillPath();
-    g.generateTexture(PLAYER_TEXTURE_KEY, size, size);
-    g.destroy();
+    const size = 96;
+    const tex = scene.textures.createCanvas(PLAYER_TEXTURE_KEY, size, size);
+    if (!tex) return;
+    const ctx = tex.context;
+    const cx = size / 2;
+    const cy = size / 2;
+
+    // Backdrop halo so the ship reads bright even without preFX glow.
+    // Pushed outward to size*0.6 so the bloom carries beyond the hull silhouette.
+    const halo = ctx.createRadialGradient(cx, cy, 4, cx, cy, size * 0.6);
+    halo.addColorStop(0, 'rgba(34, 246, 255, 0.60)');
+    halo.addColorStop(0.35, 'rgba(34, 246, 255, 0.32)');
+    halo.addColorStop(0.7, 'rgba(34, 246, 255, 0.10)');
+    halo.addColorStop(1, 'rgba(34, 246, 255, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, size, size);
+
+    // Wedge hull — outer dark plating, inner bright accent. Pointing along +x
+    // so rotation tracks the facing angle.
+    const noseX = size * 0.92;
+    const wingX = size * 0.20;
+    const wingY1 = size * 0.18;
+    const wingY2 = size * 0.82;
+    const notchX = size * 0.36;
+
+    // Drop shadow
+    ctx.save();
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = 'rgba(34, 246, 255, 0.85)';
+    ctx.fillStyle = '#0a1a22';
+    ctx.beginPath();
+    ctx.moveTo(noseX, cy);
+    ctx.lineTo(wingX, wingY1);
+    ctx.lineTo(notchX, cy);
+    ctx.lineTo(wingX, wingY2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Outline glow stroke
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(noseX, cy);
+    ctx.lineTo(wingX, wingY1);
+    ctx.lineTo(notchX, cy);
+    ctx.lineTo(wingX, wingY2);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Cyan body plating (gradient front-to-back)
+    const body = ctx.createLinearGradient(notchX, cy, noseX, cy);
+    body.addColorStop(0, '#0b3a48');
+    body.addColorStop(0.6, '#22f6ff');
+    body.addColorStop(1, '#e6ffff');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(noseX - 2, cy);
+    ctx.lineTo(wingX + 4, wingY1 + 4);
+    ctx.lineTo(notchX + 4, cy);
+    ctx.lineTo(wingX + 4, wingY2 - 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Cockpit dome (cyan glow circle)
+    const dome = ctx.createRadialGradient(cx + 4, cy, 0, cx + 4, cy, 9);
+    dome.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    dome.addColorStop(0.4, 'rgba(170, 245, 255, 0.95)');
+    dome.addColorStop(1, 'rgba(34, 246, 255, 0)');
+    ctx.fillStyle = dome;
+    ctx.beginPath();
+    ctx.arc(cx + 4, cy, 9, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Yellow nose tip accent
+    const tip = ctx.createLinearGradient(noseX - 14, cy, noseX, cy);
+    tip.addColorStop(0, 'rgba(255, 215, 90, 0)');
+    tip.addColorStop(1, '#ffd75a');
+    ctx.fillStyle = tip;
+    ctx.beginPath();
+    ctx.moveTo(noseX, cy);
+    ctx.lineTo(noseX - 14, cy - 5);
+    ctx.lineTo(noseX - 14, cy + 5);
+    ctx.closePath();
+    ctx.fill();
+
+    // Wing panel lines (subtle dark detail)
+    ctx.strokeStyle = 'rgba(2, 18, 25, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(notchX + 6, cy - 5);
+    ctx.lineTo(size * 0.7, cy - 3);
+    ctx.moveTo(notchX + 6, cy + 5);
+    ctx.lineTo(size * 0.7, cy + 3);
+    ctx.stroke();
+
+    // Engine glow ports at the tail
+    for (const py of [wingY1 + 8, wingY2 - 8]) {
+      const eg = ctx.createRadialGradient(wingX + 6, py, 0, wingX + 6, py, 7);
+      eg.addColorStop(0, 'rgba(255,255,255,1)');
+      eg.addColorStop(0.4, 'rgba(34, 246, 255, 0.9)');
+      eg.addColorStop(1, 'rgba(34, 246, 255, 0)');
+      ctx.fillStyle = eg;
+      ctx.beginPath();
+      ctx.arc(wingX + 6, py, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    tex.refresh();
   }
 
   update(dt: number, input: PlayerInput): void {
@@ -213,11 +289,20 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.dashTimer = Balance.player.dashDuration;
     this.invulnTimer = Balance.player.dashInvuln;
     // Dash Master card multiplies cooldown (×0.7 per stack).
-    this.dashCooldownTimer = Balance.player.dashCooldown * this.dashCooldownMult;
+    // Quick Boots refinery upgrade composes with the Dash Master card mult.
+    this.dashCooldownTimer =
+      Balance.player.dashCooldown * this.dashCooldownMult * UpgradeEffects.dashCooldownMult();
     this.setTint(Balance.colors.playerDashAccent);
     this.scene.time.delayedCall(Balance.player.dashDuration * 1000, () => this.clearTint());
-    this.scene.cameras.main.shake(Balance.ui.dashShakeDuration, Balance.ui.dashShakeIntensity);
+    const shakeScale = QualityManager.isReducedMotion() ? 0 : 1;
+    if (shakeScale > 0) {
+      this.scene.cameras.main.shake(
+        Balance.ui.dashShakeDuration,
+        Balance.ui.dashShakeIntensity * shakeScale,
+      );
+    }
     sfxDash();
+    bus.emit(Events.PLAYER_DASHED, this.x, this.y);
   }
 
   isDashing(): boolean {
@@ -319,7 +404,9 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     const applied = Math.min(room, amount);
     this.hp -= applied;
     this.hitInvulnTimer = Balance.player.invulnAfterHit;
-    this.scene.cameras.main.shake(Balance.ui.hitShakeDuration, Balance.ui.hitShakeIntensity);
+    if (!QualityManager.isReducedMotion()) {
+      this.scene.cameras.main.shake(Balance.ui.hitShakeDuration, Balance.ui.hitShakeIntensity);
+    }
     this.setAlpha(0.45);
     this.scene.time.delayedCall(110, () => {
       if (this.active) this.setAlpha(1);

@@ -200,6 +200,19 @@ export class PowerupSystem {
     return this.isActive('freezePulse');
   }
 
+  // Golden Fever (§13): all enemy scrap drops worth 2x while active. RaidScene
+  // reads this in spawnDrops to scale pickup `value`.
+  getScrapDropMult(): number {
+    return this.isActive('goldenFever') ? 2 : 1;
+  }
+
+  // Turret Drop (§13): RaidScene queries this each frame to drive a
+  // friendly auto-fire turret at the player's location when the power-up
+  // was activated.
+  isTurretActive(): boolean {
+    return this.isActive('turretDrop');
+  }
+
   // ---- HUD ----
 
   getActiveEffectsView(): Array<{

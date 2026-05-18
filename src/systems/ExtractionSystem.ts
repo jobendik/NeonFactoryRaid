@@ -26,6 +26,10 @@ export class ExtractionSystem {
   private ring: Phaser.GameObjects.Graphics;
   private pulse = 0;
   private alreadyEmittedOpen = false;
+  // External slow factor applied to fill rate. Extract Jammer enemies in
+  // range of the pad bring this below 1.0 each frame to slow the timer per
+  // §14.1.
+  private externalFillMult = 1;
 
   constructor(scene: Phaser.Scene, padX: number, padY: number, padRadius: number, openAt: number) {
     this.padX = padX;
@@ -60,12 +64,17 @@ export class ExtractionSystem {
       const inside = this.isPlayerInside(playerX, playerY);
       const fillPerSec = 1 / Balance.raid.extractionHoldTime;
       if (inside) {
-        this.fill = Math.min(1, this.fill + dt * fillPerSec);
+        // Extract Jammer slow applies only to the fill direction; decay is
+        // unaffected so leaving the pad still drains at the normal rate.
+        this.fill = Math.min(1, this.fill + dt * fillPerSec * this.externalFillMult);
         this.state = 'filling';
       } else {
         this.fill = Math.max(0, this.fill - dt * fillPerSec * Balance.raid.extractionDecayRate);
         this.state = this.fill > 0 ? 'decaying' : 'open';
       }
+      // Reset to 1.0 each frame — RaidScene re-applies the slow before the
+      // next tick if jammers are still in range.
+      this.externalFillMult = 1;
       if (this.fill >= 1) {
         this.state = 'extracting';
         bus.emit(Events.EXTRACTION_COMPLETE);
@@ -98,6 +107,13 @@ export class ExtractionSystem {
 
   getPadPosition(): { x: number; y: number } {
     return { x: this.padX, y: this.padY };
+  }
+
+  // Called by RaidScene each frame BEFORE update() — when an Extract Jammer
+  // is in range of the pad, mult < 1.0 slows the fill rate. Reset to 1.0
+  // after every update() so the next frame requires re-application.
+  setExternalFillMult(mult: number): void {
+    this.externalFillMult = Math.max(0, Math.min(1, mult));
   }
 
   destroy(): void {

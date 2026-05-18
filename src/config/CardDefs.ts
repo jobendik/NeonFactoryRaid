@@ -87,15 +87,18 @@ export const CardDefs: Record<string, CardDef> = {
     tier: 'rare',
     apply: m => { m.chainBonus += 1; },
   },
-  // DEFERRED — wall geometry isn't in the arena yet (§15 cover blocks are
-  // visual-only). Bouncing requires an actual collision surface.
+  // §12 Ricochet. Without real wall geometry we approximate by adding an
+  // extra in-range target per shot (the tracer "ricochets" to a second
+  // enemy). Stacks via ricochetStacks so future wall-bounce can layer on.
   ricochet: {
     id: 'ricochet',
     name: Strings.cardRicochetName,
     effect: Strings.cardRicochetEffect,
     tier: 'rare',
-    deferred: true,
-    apply: () => { /* TODO(M-future): wall-bounce projectile path */ },
+    apply: m => {
+      m.ricochetStacks += 1;
+      m.bonusWeaponTargets += 1;
+    },
   },
   magnetStorm: {
     id: 'magnetStorm',
@@ -118,15 +121,16 @@ export const CardDefs: Record<string, CardDef> = {
     tier: 'rare',
     apply: m => { m.healOnPickup += Balance.cards.healOnPickupAdd; },
   },
-  // DEFERRED — area-effect costs unclear vs. the M14 perf budget; revisit
-  // once we have benchmarks under combo-heavy load.
+  // §12 Slow Field. Per-frame radius check uses the existing spatial grid so
+  // cost is bounded; factor stacks additively but capped at 0.8 by RaidScene.
   slowField: {
     id: 'slowField',
     name: Strings.cardSlowFieldName,
     effect: Strings.cardSlowFieldEffect,
     tier: 'rare',
-    deferred: true,
-    apply: () => { /* TODO(M-future): per-frame distance check on every enemy */ },
+    apply: m => {
+      m.slowFieldFactor = Math.min(0.8, m.slowFieldFactor + Balance.cards.slowFieldFactor);
+    },
   },
   orbitalShield: {
     id: 'orbitalShield',
@@ -157,24 +161,29 @@ export const CardDefs: Record<string, CardDef> = {
     tier: 'epic',
     apply: m => { m.splitShot += 1; },
   },
-  // DEFERRED — HP-state-conditional fire rate. Adds branching to the weapon
-  // hot path and would interact with adaptive music thresholds.
+  // §12 Frenzy Mode. RaidScene reads frenzyHpFraction + frenzyFireMult each
+  // frame and feeds the resulting fire-rate boost into WeaponSystem.
   frenzyMode: {
     id: 'frenzyMode',
     name: Strings.cardFrenzyModeName,
     effect: Strings.cardFrenzyModeEffect,
     tier: 'epic',
-    deferred: true,
-    apply: () => { /* TODO(M-future): conditional fire-rate when HP < 30% */ },
+    apply: m => {
+      m.frenzyHpFraction = Balance.cards.frenzyHpFraction;
+      m.frenzyFireMult = Balance.cards.frenzyFireMult;
+    },
   },
   droneMultiplier: {
     id: 'droneMultiplier',
     name: Strings.cardDroneMultiplierName,
     effect: Strings.cardDroneMultiplierEffect,
     tier: 'epic',
-    // Per spec: "doubles existing drone count - even if 0, becomes 0".
-    // bonusWeaponTargets is seeded by the active operator at raid start.
-    apply: m => { m.bonusWeaponTargets *= 2; },
+    // Suggestions audit tuning fix: original spec doubled existing drone
+    // count — for Pulse (0 starting drones) that was a dead pick.
+    // Now: doubles the count AND grants at least +1, so it's always useful.
+    apply: m => {
+      m.bonusWeaponTargets = m.bonusWeaponTargets * 2 + 1;
+    },
   },
   vampiric: {
     id: 'vampiric',
@@ -186,23 +195,29 @@ export const CardDefs: Record<string, CardDef> = {
       m.vampiricHeal = Balance.cards.vampiricHeal;
     },
   },
-  // DEFERRED — dash-trigger ring damage. Needs new event hookup + AoE pass.
+  // §12 Nova Dash. RaidScene listens for the PLAYER_DASHED event and emits
+  // a damaging ring at the dash origin.
   novaDash: {
     id: 'novaDash',
     name: Strings.cardNovaDashName,
     effect: Strings.cardNovaDashEffect,
     tier: 'epic',
-    deferred: true,
-    apply: () => { /* TODO(M-future): emit a damaging ring on dash start */ },
+    apply: m => {
+      m.novaDashRadius = Math.max(m.novaDashRadius, Balance.cards.novaDashRadius);
+      m.novaDashDamage += Balance.cards.novaDashDamage;
+    },
   },
-  // DEFERRED — global enemy-speed scalar. Straightforward but skipped for scope.
+  // §12 Time Dilation. RaidScene passes enemySpeedMult into WaveDirector's
+  // per-enemy speed scaling each frame so the slow applies uniformly to all
+  // enemy types including the new ones (Bomber chase, Goblin flee, etc.).
   timeDilation: {
     id: 'timeDilation',
     name: Strings.cardTimeDilationName,
     effect: Strings.cardTimeDilationEffect,
     tier: 'epic',
-    deferred: true,
-    apply: () => { /* TODO(M-future): global enemy speed multiplier */ },
+    apply: m => {
+      m.enemySpeedMult *= Balance.cards.timeDilationFactor;
+    },
   },
   greedSurge: {
     id: 'greedSurge',
@@ -218,14 +233,16 @@ export const CardDefs: Record<string, CardDef> = {
     tier: 'epic',
     apply: m => { m.phoenixCharges = Math.min(1, m.phoenixCharges + 1); },
   },
-  // DEFERRED — death-triggered AoE. Skipped for scope.
+  // §12 Pyrokinetic. RaidScene applies an AoE pulse around every dead enemy.
   pyrokinetic: {
     id: 'pyrokinetic',
     name: Strings.cardPyrokineticName,
     effect: Strings.cardPyrokineticEffect,
     tier: 'epic',
-    deferred: true,
-    apply: () => { /* TODO(M-future): on-death AoE damage */ },
+    apply: m => {
+      m.pyroAoeRadius = Math.max(m.pyroAoeRadius, Balance.cards.pyroAoeRadius);
+      m.pyroAoeDamage += Balance.cards.pyroAoeDamage;
+    },
   },
 };
 

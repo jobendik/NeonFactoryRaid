@@ -40,6 +40,28 @@ export interface RunMods {
   // this at raid start; Drone Multiplier card multiplies whatever's already
   // here ("doubles even if 0"). WeaponSystem adds it to effective targets.
   bonusWeaponTargets: number;
+
+  // -------- Suggestions audit: previously-deferred cards --------
+  // Slow Field: enemies within slowFieldRadius of the player are slowed
+  // by slowFieldFactor (0 = no slow, 1 = full slow). 0 base.
+  slowFieldFactor: number;
+  // Frenzy Mode: when player HP < frenzyHpFraction, weapon fire cooldown is
+  // multiplied by frenzyFireMult (<1 = faster). 0 = inactive.
+  frenzyHpFraction: number;
+  frenzyFireMult: number;
+  // Nova Dash: when > 0, a damaging ring (radius novaDashRadius, damage
+  // novaDashDamage) emits on every dash start.
+  novaDashRadius: number;
+  novaDashDamage: number;
+  // Time Dilation: global enemy speed multiplier. 1.0 = no effect.
+  enemySpeedMult: number;
+  // Pyrokinetic: on enemy death, deal pyroAoeDamage in pyroAoeRadius around
+  // the corpse. 0 = inactive.
+  pyroAoeRadius: number;
+  pyroAoeDamage: number;
+  // Ricochet: enables wall-bounce for player bullets (not used by hitscan
+  // tracer model). Lifted to a stack count for future use.
+  ricochetStacks: number;
 }
 
 export function createDefaultRunMods(): RunMods {
@@ -69,5 +91,15 @@ export function createDefaultRunMods(): RunMods {
     greedSurgeMult: 1.0,
 
     bonusWeaponTargets: 0,
+
+    slowFieldFactor: 0,
+    frenzyHpFraction: 0,
+    frenzyFireMult: 1.0,
+    novaDashRadius: 0,
+    novaDashDamage: 0,
+    enemySpeedMult: 1.0,
+    pyroAoeRadius: 0,
+    pyroAoeDamage: 0,
+    ricochetStacks: 0,
   };
 }

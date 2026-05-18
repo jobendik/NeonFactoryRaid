@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { PowerupDefs, type PowerupKind } from '../config/PowerupDefs';
+import { applyGlow } from '../systems/NeonFX';
 
 // Field-spawned power-up per blueprint §13. Pentagon ring shape, color per
 // def, magnetizes toward the player when in range (same pull profile as
@@ -14,6 +15,7 @@ export class Powerup extends Phaser.Physics.Arcade.Sprite {
   private pulse = 0;
   private age = 0;
   private body_!: Phaser.Physics.Arcade.Body;
+  private glowApplied = false;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Powerup.ensureTexture(scene);
@@ -21,12 +23,14 @@ export class Powerup extends Phaser.Physics.Arcade.Sprite {
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.body_ = this.body as Phaser.Physics.Arcade.Body;
-    this.body_.setCircle(12, 4, 4);
+    // 48px texture → center is (24, 24). Body radius 12, offset (12, 12).
+    this.body_.setCircle(12, 12, 12);
     this.setActive(false).setVisible(false);
     this.body_.enable = false;
   }
 
   spawn(x: number, y: number, kind: PowerupKind): void {
+    const kindChanged = this.kind !== kind || !this.glowApplied;
     this.kind = kind;
     const def = PowerupDefs[kind];
     this.setPosition(x, y);
@@ -39,6 +43,12 @@ export class Powerup extends Phaser.Physics.Arcade.Sprite {
     this.age = 0;
     this.body_.setVelocity(0, 0);
     this.body_.setDrag(0, 0);
+    if (kindChanged) {
+      const fx = (this as unknown as { preFX?: { clear?: () => void } }).preFX;
+      fx?.clear?.();
+      applyGlow(this, def.color, 6, 1);
+      this.glowApplied = true;
+    }
   }
 
   kill(): void {
@@ -70,24 +80,51 @@ export class Powerup extends Phaser.Physics.Arcade.Sprite {
   // outlined so setTint() can recolor it cleanly per power-up kind.
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(POWERUP_TEXTURE_KEY)) return;
-    const dim = 32;
-    const r = 12;
-    const g = scene.add.graphics();
-    g.lineStyle(3, 0xffffff, 1);
-    g.beginPath();
+    const dim = 48;
+    const tex = scene.textures.createCanvas(POWERUP_TEXTURE_KEY, dim, dim);
+    if (!tex) return;
+    const ctx = tex.context;
+    const cx = dim / 2;
+    const cy = dim / 2;
+    const r = 13;
+    // Soft white halo — setTint colors it per powerup kind.
+    const halo = ctx.createRadialGradient(cx, cy, 4, cx, cy, cx);
+    halo.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+    halo.addColorStop(0.5, 'rgba(255, 255, 255, 0.30)');
+    halo.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, dim, dim);
+    // Outer dim ring
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 6, 0, Math.PI * 2);
+    ctx.stroke();
+    // Pentagon body + bright outline
+    ctx.beginPath();
     for (let i = 0; i < 5; i++) {
       const a = -Math.PI / 2 + (i / 5) * Math.PI * 2;
-      const x = dim / 2 + Math.cos(a) * r;
-      const y = dim / 2 + Math.sin(a) * r;
-      if (i === 0) g.moveTo(x, y);
-      else g.lineTo(x, y);
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     }
-    g.closePath();
-    g.strokePath();
-    g.lineStyle(1, 0xffffff, 0.4);
-    g.strokeCircle(dim / 2, dim / 2, r + 4);
-    g.generateTexture(POWERUP_TEXTURE_KEY, dim, dim);
-    g.destroy();
+    ctx.closePath();
+    const body = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    body.addColorStop(0, 'rgba(255,255,255,0.95)');
+    body.addColorStop(0.6, 'rgba(255,255,255,0.4)');
+    body.addColorStop(1, 'rgba(255,255,255,0.1)');
+    ctx.fillStyle = body;
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    // Bright center dot
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fill();
+    tex.refresh();
   }
 }
 

@@ -3,7 +3,10 @@ import { Strings } from '../config/Strings';
 import { Economy } from '../systems/EconomySystem';
 import { AdManager } from '../platform/AdManager';
 import { saveSystem } from '../platform/SaveSystem';
+import { loadScrapyardScene } from '../main';
 import type { RaidEndPayload, RaidEndState } from '../core/types';
+import { RetentionSystem } from '../systems/RetentionSystem';
+import { OperatorDefs } from '../config/OperatorDefs';
 
 // Run-end summary per blueprint §7.10. Launched by RaidScene as a top-stack overlay
 // over a stopped raid. Three buttons:
@@ -242,6 +245,60 @@ export class SummaryScene extends Phaser.Scene {
       true,
       () => this.redeploy(),
     );
+
+    // Retention pass — "what's next" teaser pinned just below the button
+    // row. Three signals composed in priority order so the redeploy
+    // button reads like a slot-machine pull rather than "back to menu":
+    //   1. Active DOUBLE PAYDAY banner — biggest hook, rarest event.
+    //   2. Next operator unlock progress — chase ladder.
+    //   3. Mission Board claimables — instant-gratification nudge.
+    // Tutorial summaries skip this entirely (we already collapse to
+    // one button there).
+    this.renderRedeployTeaser(w, buttonY);
+  }
+
+  private renderRedeployTeaser(w: number, buttonY: number): void {
+    const lines: { text: string; color: string }[] = [];
+
+    if (RetentionSystem.isPaydayActive()) {
+      const left = RetentionSystem.paydayRaidsRemaining();
+      lines.push({
+        text: `${Strings.paydayBadgePrefix}2  · ${left} raid${left === 1 ? '' : 's'} left`,
+        color: '#72ff9f',
+      });
+    }
+
+    const almost = RetentionSystem.almostThere();
+    if (almost.nextOperator) {
+      const def = OperatorDefs[almost.nextOperator.id];
+      lines.push({
+        text: `${Strings.almostNextOperatorPrefix}${def.name}${Strings.almostNextOperatorMid}${almost.nextOperator.cores}/${almost.nextOperator.cost}${Strings.almostNextOperatorSuffix}`,
+        color: almost.nextOperator.ready ? '#72ff9f' : '#ffd75a',
+      });
+    }
+
+    if (almost.missionsReadyToClaim > 0) {
+      lines.push({
+        text: `${Strings.almostMissionPrefix}${almost.missionsReadyToClaim}${Strings.almostMissionSuffix}`,
+        color: '#ff416b',
+      });
+    }
+
+    if (lines.length === 0) return;
+
+    const baseY = buttonY + 56;
+    for (let i = 0; i < Math.min(2, lines.length); i++) {
+      const line = lines[i];
+      this.add
+        .text(w / 2, baseY + i * 18, line.text, {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: line.color,
+          stroke: '#000000',
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5, 0);
+    }
   }
 
   // M20 DOUBLE LOOT — rewarded-ad path. On grant, doubles BOTH the displayed
@@ -306,17 +363,36 @@ export class SummaryScene extends Phaser.Scene {
   }
 
   private gotoFactory(): void {
-    this.scene.stop('RaidScene');
-    this.scene.stop('ScrapyardScene');
-    this.scene.start('FactoryScene');
-    this.scene.stop();
+    // §17.6 midgame ad opportunity before returning to factory. Awaited so the
+    // ad gets a chance to render before the factory scene boots; the SDK call
+    // is best-effort and never blocks navigation on failure.
+    void AdManager.maybeRequestMidgame({
+      raidEndState: this.endState,
+      doubleLootClaimed: this.doubleLootClaimed,
+      tutorial: this.tutorial,
+    }).finally(() => {
+      this.scene.stop('RaidScene');
+      this.scene.stop('ScrapyardScene');
+      this.scene.start('FactoryScene');
+      this.scene.stop();
+    });
   }
 
   private redeploy(): void {
-    const target = this.scrapyard ? 'ScrapyardScene' : 'RaidScene';
+    if (this.scrapyard) {
+      // Scrapyard scene is lazy-loaded — ensure the chunk is registered
+      // before starting it. Already-loaded calls resolve synchronously.
+      void loadScrapyardScene().then(() => {
+        this.scene.stop('RaidScene');
+        this.scene.stop('ScrapyardScene');
+        this.scene.start('ScrapyardScene');
+        this.scene.stop();
+      });
+      return;
+    }
     this.scene.stop('RaidScene');
     this.scene.stop('ScrapyardScene');
-    this.scene.start(target);
+    this.scene.start('RaidScene');
     this.scene.stop();
   }
 }

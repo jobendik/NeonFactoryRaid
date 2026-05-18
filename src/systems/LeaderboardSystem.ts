@@ -1,20 +1,21 @@
-// Local daily-seed leaderboard. See blueprint.md §16.3.
+// Daily-seed personal-bests + leaderboard scaffold. See blueprint.md §16.3.
 //
-// For Run C we ship a LOCAL-only board: the top scores stored in
-// saveSystem.get().dailySeedHistory (capped at the most recent 30 days)
-// rendered in a panel in FactoryScene.
+// The build ships PERSONAL BESTS only — every entry is the local player's
+// own historical daily-seed scores. A global leaderboard would require a
+// backend (none in the current build). The UI is labeled honestly as
+// "PERSONAL BESTS" rather than pretending local-only entries are global
+// rankings (which was an anti-retention pattern).
 //
-// TODO(post-launch): swap submitScore for a real network backend (CrazyGames
-// or a self-hosted endpoint). The async signature lets callers await the
-// submission without changing flow once the network call lands. The local
-// history stays as a fallback / personal-bests record.
+// `hasBackend()` returns false in the current build; a future backend swap
+// just flips this and points `submitScore` at the real endpoint.
 
 import { saveSystem } from '../platform/SaveSystem';
 
 export interface LeaderboardEntry {
   date: string;        // YYYY-MM-DD
   score: number;
-  // True for the entry the local player just posted - the UI labels it "YOU".
+  // True for the entry the local player just posted. With no backend, all
+  // entries are the local player's — used to highlight the most-recent row.
   isYou: boolean;
 }
 
@@ -22,6 +23,12 @@ const MAX_HISTORY = 30;
 const MAX_DISPLAY = 10;
 
 export const LeaderboardSystem = {
+  // True only when a real network backend is wired up. Until then the UI
+  // surfaces personal-bests with honest labeling.
+  hasBackend(): boolean {
+    return false;
+  },
+
   // Marks the daily-seed slot used for `date`. Called at raid launch so a
   // fail/collapse still consumes the day's attempt.
   markAttempted(date: string): void {
@@ -29,27 +36,28 @@ export const LeaderboardSystem = {
   },
 
   // Records the player's score for `date`. Called only on successful
-  // extract; the dailySeedHistory is what feeds the local leaderboard.
+  // extract.
   submitScore: async (date: string, score: number): Promise<boolean> => {
     const save = saveSystem.get();
     save.dailySeedHistory = [
       { date, score },
       ...save.dailySeedHistory,
     ].slice(0, MAX_HISTORY);
-    // TODO(post-launch): also POST to a real backend here.
+    // Backend swap: POST to remote endpoint here when hasBackend() flips.
     return true;
   },
 
-  // Returns the top entries by score (descending). For the local-only build
-  // this is just the saved history sorted; once a real backend lands, this
-  // could be replaced by a remote fetch.
+  // Returns the top personal-best entries by score (descending). The most
+  // recent date is flagged isYou so the UI can highlight it.
   getTopEntries(): LeaderboardEntry[] {
     const save = saveSystem.get();
+    if (save.dailySeedHistory.length === 0) return [];
+    const mostRecentDate = save.dailySeedHistory[0].date;
     return save.dailySeedHistory
       .slice()
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_DISPLAY)
-      .map(e => ({ date: e.date, score: e.score, isYou: true }));
+      .map(e => ({ date: e.date, score: e.score, isYou: e.date === mostRecentDate }));
   },
 
   hasAttemptedToday(today: string): boolean {

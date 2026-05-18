@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import { applyGlow } from '../systems/NeonFX';
 
 export const ENEMY_BULLET_TEXTURE_KEY = 'enemy-bullet';
 
@@ -12,6 +13,7 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
   private body_!: Phaser.Physics.Arcade.Body;
   private age = 0;
   private lifespan = Balance.shooter.bulletLifespanSec;
+  private glowApplied = false;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     Bullet.ensureTexture(scene);
@@ -19,7 +21,9 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
     scene.add.existing(this);
     scene.physics.add.existing(this);
     this.body_ = this.body as Phaser.Physics.Arcade.Body;
-    this.body_.setCircle(5, 0, 0);
+    // 28px texture → center is (14, 14). Body radius 5, offset (9, 9) puts
+    // the hit circle on the projectile's bright core.
+    this.body_.setCircle(5, 9, 9);
     this.setActive(false).setVisible(false);
     this.body_.enable = false;
   }
@@ -32,6 +36,10 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
     this.body_.setVelocity(dirX * speed, dirY * speed);
     this.setActive(true).setVisible(true);
     this.setRotation(Math.atan2(dirY, dirX));
+    if (!this.glowApplied) {
+      applyGlow(this, Balance.colors.enemyShooter, 6, 0);
+      this.glowApplied = true;
+    }
   }
 
   kill(): void {
@@ -48,13 +56,32 @@ export class Bullet extends Phaser.Physics.Arcade.Sprite {
 
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(ENEMY_BULLET_TEXTURE_KEY)) return;
-    const dim = 12;
-    const g = scene.add.graphics();
-    g.fillStyle(Balance.colors.enemyShooter, 1);
-    g.lineStyle(2, 0xffffff, 0.85);
-    g.fillCircle(dim / 2, dim / 2, dim / 2 - 1);
-    g.strokeCircle(dim / 2, dim / 2, dim / 2 - 1);
-    g.generateTexture(ENEMY_BULLET_TEXTURE_KEY, dim, dim);
-    g.destroy();
+    const dim = 28;
+    const tex = scene.textures.createCanvas(ENEMY_BULLET_TEXTURE_KEY, dim, dim);
+    if (!tex) return;
+    const ctx = tex.context;
+    const cx = dim / 2;
+    const cy = dim / 2;
+    const color = Balance.colors.enemyShooter;
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    // Outer halo
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, cx);
+    halo.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.85)`);
+    halo.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 0.45)`);
+    halo.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, dim, dim);
+    // Bright core
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 5);
+    core.addColorStop(0, '#ffffff');
+    core.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, 1)`);
+    core.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fill();
+    tex.refresh();
   }
 }

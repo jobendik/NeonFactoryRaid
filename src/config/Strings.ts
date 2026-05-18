@@ -1,7 +1,13 @@
-// All player-facing strings. Default English; secondary languages added in Phase 3.
-// Keep this thin during Milestone 0 - additional keys are added as UI is built.
+// All player-facing strings. English is the source of truth; secondary
+// languages live in `translations` below and override any matching keys when
+// the user picks them via the settings menu.
+//
+// Suggestions audit — scaffolded the localization system per blueprint §22.8.
+// Five CrazyGames-relevant locales are wired (no, es, pt, de, fr); each
+// starts with stubs (or auto-pick from English) and will fill in over
+// post-launch content drops.
 
-export const Strings = {
+const StringsEn = {
   bootOk: 'Boot OK',
   gameTitle: 'NEON FACTORY RAID',
   fps: 'FPS',
@@ -145,14 +151,15 @@ export const Strings = {
   streakLabel: 'Streak: Day ',
   questRewardToast: 'Quest reward: +100 Scrap, +1 Core, +1 Shard',
 
-  // M19 — daily seed leaderboard.
+  // M19 — daily seed leaderboard (personal-bests until backend lands).
   factoryDailySeed: 'DAILY SEED',
   factoryDailySeedAttempted: 'DAILY DONE',
-  leaderboardButton: "TODAY'S BOARD",
-  leaderboardTitle: "TODAY'S TOP SCORES",
+  leaderboardButton: 'PERSONAL BESTS',
+  leaderboardTitle: 'PERSONAL BESTS',
   leaderboardEmpty: 'No daily attempts yet. Try one!',
-  leaderboardYou: 'YOU',
+  leaderboardYou: 'TODAY',
   leaderboardClose: 'CLOSE',
+  leaderboardLocalNote: 'Global rankings coming soon',
   factoryDailySeedHint: 'Same seed, all players',
 
   // M20 — rewarded ad copy. Modal title + description per placement plus
@@ -209,6 +216,209 @@ export const Strings = {
   seasonTierMid: ' / ',
   seasonPremiumTag: ' (Premium)',
   seasonFreeTag: ' (Free)',
-} as const;
 
-export type StringKey = keyof typeof Strings;
+  // Refinery (Cores → permanent multipliers) per blueprint §10.2.
+  refineryButton: 'REFINERY',
+  refineryTitle: 'CORE REFINERY',
+  refineryClose: 'CLOSE',
+  refineryOwned: 'OWNED',
+  refineryLocked: 'LOCKED',
+  refineryRequiresPrefix: 'Requires: ',
+  refineryCostSuffix: ' Cores',
+  refineryCatalyst1Name: 'Scrap Catalyst I',
+  refineryCatalyst1Effect: '+5% Scrap earned',
+  refineryCatalyst2Name: 'Scrap Catalyst II',
+  refineryCatalyst2Effect: '+10% Scrap earned',
+  refineryCatalyst3Name: 'Scrap Catalyst III',
+  refineryCatalyst3Effect: '+20% Scrap earned',
+  refineryDroneOverclockName: 'Drone Overclock',
+  refineryDroneOverclockEffect: '+1 starting drone in raids',
+  refineryMagnetSurgeName: 'Magnet Surge',
+  refineryMagnetSurgeEffect: '+25% magnet range',
+  refineryIronPlatingName: 'Iron Plating',
+  refineryIronPlatingEffect: '+25 max HP',
+  refineryQuickBootsName: 'Quick Boots',
+  refineryQuickBootsEffect: '-10% dash cooldown',
+  refineryLuckyStrikeName: 'Lucky Strike',
+  refineryLuckyStrikeEffect: '+15% core drop rate',
+
+  // Mission Board (§16.6).
+  missionBoardTitle: 'CONTRACTS',
+  missionBoardClose: 'CLOSE',
+  missionBoardEmpty: 'All contracts completed. Refresh in 24h.',
+  missionBoardRefresh: 'REFRESH',
+  missionBoardClaim: 'CLAIM',
+  missionBoardClaimed: 'CLAIMED',
+  missionExtract: 'Extract with 2 Cores',
+  missionKillSwarmers: 'Kill 30 Swarmers',
+  missionUseMagnet: 'Use Magnet Burst twice',
+  missionKillBomber: 'Kill 5 Bombers',
+  missionUseFreeze: 'Use Freeze Pulse',
+  missionExtractGreedX2: 'Extract at Greed x2+',
+
+  // Prestige (System Reboot) per §10.3.
+  prestigeButton: 'PRESTIGE',
+  prestigeTitle: 'SYSTEM REBOOT',
+  prestigeBodyEligible:
+    'Wipe your Scrap and upgrades. Keep Refinery, cosmetics, operators, and achievements. ' +
+    'Gain +1 Cyber-Core (permanent +10% global multiplier). Are you sure?',
+  prestigeBodyLocked: 'Reach Generator Lv. 25 and bank 1000 Cores to unlock System Reboot.',
+  prestigeConfirm: 'REBOOT',
+  prestigeCancel: 'CANCEL',
+  prestigeCyberCoreLabel: 'Cyber-Cores',
+
+  // Retention pass — welcome-back hook, streak FOMO, comeback bonus, DOUBLE
+  // PAYDAY rare event, almost-there nudges. Copy is intentionally short
+  // and dopamine-shaped: every line should feel like the game noticed you.
+  welcomeBackTitle: 'WELCOME BACK',
+  welcomeBackOfflinePrefix: '+',
+  welcomeBackOfflineSuffix: ' Scrap while you were gone',
+  welcomeBackEmpty: 'Factory ready. Time to raid.',
+  streakFire: '🔥',
+  streakDayPrefix: 'DAY ',
+  streakDaySuffix: ' STREAK',
+  streakWarnLastChance: 'STREAK ENDS TONIGHT — claim daily quest!',
+  streakWarnSkipUsed: 'STREAK SAVED — skip-day used. Don\'t miss tomorrow.',
+  streakBrokenTitle: 'STREAK LOST',
+  streakBrokenSub: 'Rebuild from Day 1. Start now.',
+  comebackTitle: 'WE MISSED YOU',
+  comebackSub: '2× SCRAP for 24 hours — go get rich.',
+  paydayTitle: 'DOUBLE PAYDAY',
+  paydaySub: '2× loot — next 3 raids only',
+  paydayBadgePrefix: 'PAYDAY ×',
+  paydayBadgeMid: ' (',
+  paydayBadgeSuffix: ' raids left)',
+  almostNextOperatorPrefix: 'Next operator: ',
+  almostNextOperatorMid: '   ',
+  almostNextOperatorSuffix: ' Cores',
+  almostSeasonTierPrefix: 'Season Tier ',
+  almostSeasonTierMid: ' → ',
+  almostSeasonTierSuffix: ' soon',
+  almostMissionPrefix: 'CONTRACTS · ',
+  almostMissionSuffix: ' ready to claim',
+  notifyDot: '●',
+  redeployTeaserPrefix: 'NEXT RAID: ',
+};
+
+export type Locale = 'en' | 'no' | 'es' | 'pt' | 'de' | 'fr';
+
+// Type alias for the resolved string table. Plain string values so locale
+// overrides can swap in without violating literal-type constraints.
+type StringsTable = { [K in keyof typeof StringsEn]: string };
+
+// Per-locale partial overrides. Any key omitted falls back to English. The
+// scaffold ships with a handful of high-visibility strings translated so the
+// language switch is observable without blocking on a full translation pass.
+const translations: Record<Locale, Partial<StringsTable>> = {
+  en: {},
+  no: {
+    summaryExtracted: 'EVAKUERING FULLFØRT',
+    summaryFailed: 'RAID MISLYKTES',
+    summaryFactory: 'FABRIKK',
+    summaryRedeploy: 'EN GANG TIL',
+    summaryDoubleLoot: 'DOBBEL GEVINST',
+    factoryDeploy: 'START RAID',
+    greedLabel: 'GRÅDIGHET',
+    hpLabel: 'HP',
+    refineryTitle: 'KJERNERAFFINERI',
+    missionBoardTitle: 'OPPDRAG',
+    prestigeTitle: 'SYSTEMOMSTART',
+  },
+  es: {
+    summaryExtracted: 'EXTRACCIÓN COMPLETA',
+    summaryFailed: 'RAID FALLIDO',
+    summaryFactory: 'FÁBRICA',
+    summaryRedeploy: 'OTRA INCURSIÓN',
+    summaryDoubleLoot: 'BOTÍN DOBLE',
+    factoryDeploy: 'DESPLEGAR',
+    greedLabel: 'AVARICIA',
+    refineryTitle: 'REFINERÍA',
+    missionBoardTitle: 'CONTRATOS',
+    prestigeTitle: 'REINICIO',
+  },
+  pt: {
+    summaryExtracted: 'EXTRAÇÃO COMPLETA',
+    summaryFailed: 'RAID FALHOU',
+    summaryFactory: 'FÁBRICA',
+    summaryRedeploy: 'OUTRA INVASÃO',
+    summaryDoubleLoot: 'SAQUE DUPLO',
+    factoryDeploy: 'IMPLANTAR',
+    greedLabel: 'GANÂNCIA',
+    refineryTitle: 'REFINARIA',
+    missionBoardTitle: 'CONTRATOS',
+    prestigeTitle: 'REINICIAR',
+  },
+  de: {
+    summaryExtracted: 'EXTRAKTION ERFOLGREICH',
+    summaryFailed: 'RAID GESCHEITERT',
+    summaryFactory: 'FABRIK',
+    summaryRedeploy: 'NOCH EIN RAID',
+    summaryDoubleLoot: 'DOPPELTE BEUTE',
+    factoryDeploy: 'EINSATZ',
+    greedLabel: 'GIER',
+    refineryTitle: 'RAFFINERIE',
+    missionBoardTitle: 'AUFTRÄGE',
+    prestigeTitle: 'NEUSTART',
+  },
+  fr: {
+    summaryExtracted: 'EXTRACTION RÉUSSIE',
+    summaryFailed: 'RAID ÉCHOUÉ',
+    summaryFactory: 'USINE',
+    summaryRedeploy: 'UN AUTRE RAID',
+    summaryDoubleLoot: 'BUTIN DOUBLÉ',
+    factoryDeploy: 'DÉPLOYER',
+    greedLabel: 'AVIDITÉ',
+    refineryTitle: 'RAFFINERIE',
+    missionBoardTitle: 'CONTRATS',
+    prestigeTitle: 'REDÉMARRAGE',
+  },
+};
+
+// Active locale derived from the URL hash, localStorage, or browser default.
+function detectLocale(): Locale {
+  const valid: Locale[] = ['en', 'no', 'es', 'pt', 'de', 'fr'];
+  try {
+    const fromStorage = localStorage.getItem('nfr:locale');
+    if (fromStorage && valid.includes(fromStorage as Locale)) return fromStorage as Locale;
+  } catch {
+    // localStorage may be disabled.
+  }
+  if (typeof navigator !== 'undefined') {
+    const nav = (navigator.language || 'en').slice(0, 2).toLowerCase();
+    if (valid.includes(nav as Locale)) return nav as Locale;
+  }
+  return 'en';
+}
+
+let currentLocale: Locale = detectLocale();
+
+// Resolved string table — re-built whenever the active locale changes.
+// Direct accesses like `Strings.summaryExtracted` continue to work; setLocale
+// mutates the same object so existing imports stay live.
+export const Strings: StringsTable = { ...StringsEn };
+applyLocaleOverrides();
+
+function applyLocaleOverrides(): void {
+  // Reset to English first so swapping back doesn't keep stale entries.
+  Object.assign(Strings, StringsEn);
+  const overrides = translations[currentLocale] ?? {};
+  Object.assign(Strings, overrides);
+}
+
+export function setLocale(locale: Locale): void {
+  currentLocale = locale;
+  try {
+    localStorage.setItem('nfr:locale', locale);
+  } catch {
+    // Persist failure is non-fatal; selection lives in-memory only.
+  }
+  applyLocaleOverrides();
+}
+
+export function getLocale(): Locale {
+  return currentLocale;
+}
+
+export const SUPPORTED_LOCALES: Locale[] = ['en', 'no', 'es', 'pt', 'de', 'fr'];
+
+export type StringKey = keyof typeof StringsEn;

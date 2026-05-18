@@ -92,6 +92,25 @@ class QualityManagerImpl {
     return Balance.quality.presets[preset].dprCap;
   }
 
+  // Reduced-motion toggle (Suggestions audit P1-6). When true, callers should
+  // suppress / scale down screen shake, vignette pulses, and big particle
+  // bursts. Stored on save settings so the choice persists; defaults on for
+  // OS-level prefers-reduced-motion.
+  isReducedMotion(): boolean {
+    return saveSystem.get().settings.reducedMotion === true;
+  }
+
+  setReducedMotion(on: boolean): void {
+    saveSystem.get().settings.reducedMotion = on;
+  }
+
+  // Multiplier callers can apply to camera-shake intensity, particle counts,
+  // etc. Returns 0 to fully disable, or 1 for full intensity. Use this in
+  // hot loops instead of branching on isReducedMotion().
+  motionScale(): number {
+    return this.isReducedMotion() ? 0 : 1;
+  }
+
   // ---- Auto-detect tick ----
 
   // Called by HUDScene each frame with current FPS. Keeps a rolling average

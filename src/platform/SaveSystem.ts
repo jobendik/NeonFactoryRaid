@@ -7,7 +7,7 @@ import { Balance } from '../config/Balance';
 import type { UpgradeLevels, RefineryLevels, FtueUnlocks } from '../core/types';
 import type { OperatorId } from '../config/OperatorDefs';
 
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 11;
 
 export type QualityPreset = 'low' | 'medium' | 'high';
 const SAVE_KEY = 'save';
@@ -112,6 +112,14 @@ export interface SaveData {
     qualityPreset: QualityPreset;
     qualityAutoDetect: boolean;
     qualityUpgradeOffered: boolean;
+    // Suggestions audit — Reduced Motion toggle. When true:
+    //   - Camera shake magnitude halved (or fully disabled per scene call).
+    //   - Greed vignette pulse + deep-end tint suppressed.
+    //   - Particle counts capped at Low preset even at higher quality.
+    // Auto-on when the OS reports prefers-reduced-motion: reduce.
+    reducedMotion: boolean;
+    // Mouse sensitivity for the 3D Scrapyard mode (FPSCamera). 1.0 = base.
+    scrapyardMouseSensitivity: number;
   };
   tutorialDone: boolean;
   // M25 — 3D Scrapyard mode lifetime stats. Independent of the top-down raid
@@ -124,6 +132,40 @@ export interface SaveData {
   successfulExtracts: number;
   firstCoreCollected: boolean;
   ftueUnlocks: FtueUnlocks;
+  // Suggestions audit — Mission Board state (§16.6). `date` is the YYYY-MM-DD
+  // of the last refresh; `slots` is the 3 active contracts.
+  missions?: {
+    date: string;
+    slots: { id: string; progress: number; claimed: boolean }[];
+  };
+  // Retention pass — drives the welcome-back hook, comeback bonus, and the
+  // rare DOUBLE PAYDAY event. All three are powerful CrazyGames retention
+  // levers; see RetentionSystem for the rules.
+  //   lastBootMs           : epoch ms of the previous app boot (so we can
+  //                          measure absence at the NEXT boot and decide
+  //                          whether to fire a comeback bonus).
+  //   comebackBonusUntilMs : when set in the future, every Scrap drop
+  //                          gets +100% for the window. Awarded after 7+
+  //                          day absences with a 24h duration.
+  //   comebackAnnouncedMs  : the lastBootMs that *triggered* the current
+  //                          comeback window. Used so the welcome-back
+  //                          banner shows only on the first boot after
+  //                          a long absence, not every subsequent boot
+  //                          while the buff is still live.
+  //   doublePaydayActive   : true when the rare event banner should
+  //                          render; raids during this window pay 2x.
+  //   doublePaydayRaidsLeft: countdown so the event clears itself after
+  //                          N raids regardless of date.
+  //   doublePaydayDate     : YYYY-MM-DD UTC of the boot that rolled the
+  //                          event so we never roll it twice in one day.
+  retention: {
+    lastBootMs: number;
+    comebackBonusUntilMs: number;
+    comebackAnnouncedMs: number;
+    doublePaydayActive: boolean;
+    doublePaydayRaidsLeft: number;
+    doublePaydayDate: string;
+  };
   lastSave: number;
 }
 
@@ -178,6 +220,11 @@ export function createDefaultSave(): SaveData {
       qualityPreset: Balance.quality.defaultPreset,
       qualityAutoDetect: true,
       qualityUpgradeOffered: false,
+      reducedMotion:
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+      scrapyardMouseSensitivity: 1.0,
     },
     tutorialDone: false,
     scrapyardStats: { runs: 0, extracts: 0, kills: 0, bestLoot: 0 },
@@ -185,6 +232,15 @@ export function createDefaultSave(): SaveData {
     successfulExtracts: 0,
     firstCoreCollected: false,
     ftueUnlocks: defaultFtueUnlocks(),
+    missions: { date: '', slots: [] },
+    retention: {
+      lastBootMs: 0,
+      comebackBonusUntilMs: 0,
+      comebackAnnouncedMs: 0,
+      doublePaydayActive: false,
+      doublePaydayRaidsLeft: 0,
+      doublePaydayDate: '',
+    },
     lastSave: Date.now(),
   };
 }
@@ -337,6 +393,48 @@ function migrateV8toV9(v8: MigratingSave): MigratingSave {
   };
 }
 
+// v9 → v10: Suggestions audit adds reducedMotion + scrapyardMouseSensitivity
+// to settings. Honor any prefers-reduced-motion OS preference on first
+// migration so motion-sensitive users on existing saves get an opt-out
+// without having to find the menu.
+function migrateV9toV10(v9: MigratingSave): MigratingSave {
+  const settings = (v9.settings ?? {}) as Record<string, unknown>;
+  const reducedMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return {
+    ...v9,
+    version: 10,
+    settings: {
+      ...settings,
+      reducedMotion,
+      scrapyardMouseSensitivity: 1.0,
+    },
+  };
+}
+
+// v10 → v11: Retention pass adds the `retention` block (lastBootMs,
+// comebackBonusUntilMs, comebackAnnouncedMs, doublePaydayActive,
+// doublePaydayRaidsLeft, doublePaydayDate). Seeding lastBootMs from lastSave
+// gives existing players a non-zero baseline so the first comeback-bonus
+// check has a real "time since last seen" to compare against.
+function migrateV10toV11(v10: MigratingSave): MigratingSave {
+  const lastSave = typeof v10.lastSave === 'number' ? (v10.lastSave as number) : 0;
+  return {
+    ...v10,
+    version: 11,
+    retention: {
+      lastBootMs: lastSave,
+      comebackBonusUntilMs: 0,
+      comebackAnnouncedMs: 0,
+      doublePaydayActive: false,
+      doublePaydayRaidsLeft: 0,
+      doublePaydayDate: '',
+    },
+  };
+}
+
 // Migration path - new versions add their case here. Old saves walk forward step
 // by step. Per the M10 gate: a v0 save (no `version` field, written before
 // versioning existed) is treated as a fresh save - we don't try to merge
@@ -358,13 +456,15 @@ function migrate(raw: unknown): SaveData {
   if (save.version === 6) save = migrateV6toV7(save);
   if (save.version === 7) save = migrateV7toV8(save);
   if (save.version === 8) save = migrateV8toV9(save);
+  if (save.version === 9) save = migrateV9toV10(save);
+  if (save.version === 10) save = migrateV10toV11(save);
 
   if (save.version === SAVE_VERSION) {
     return save as unknown as SaveData;
   }
 
   // Future migration steps register here:
-  //   if (save.version === 9) save = migrateV9toV10(save);
+  //   if (save.version === 10) save = migrateV10toV11(save);
   // Unknown / future versions fall through to a fresh save - safer than
   // running mismatched logic against a shape we don't understand.
   return createDefaultSave();

@@ -15,7 +15,9 @@ export type PowerupKind =
   | 'laserOverdrive'
   | 'timeBonus'
   | 'shieldBubble'
-  | 'freezePulse';
+  | 'freezePulse'
+  | 'goldenFever'
+  | 'turretDrop';
 
 export interface PowerupDef {
   id: PowerupKind;
@@ -91,6 +93,22 @@ export const PowerupDefs: Record<PowerupKind, PowerupDef> = {
     iconText: 'FRZE',
     instant: false,
   },
+  goldenFever: {
+    id: 'goldenFever',
+    label: 'GOLDEN FEVER',
+    color: 0xffd75a,
+    durationSec: 8.0,
+    iconText: 'GOLD',
+    instant: false,
+  },
+  turretDrop: {
+    id: 'turretDrop',
+    label: 'TURRET DROP',
+    color: 0xff9c3d,
+    durationSec: 12.0,
+    iconText: 'TURR',
+    instant: false,
+  },
 };
 
 // Random-spawn pool for normal raids. Tutorial spawns are scripted by
@@ -103,4 +121,6 @@ export const POWERUP_POOL: PowerupKind[] = [
   'timeBonus',
   'shieldBubble',
   'freezePulse',
+  'goldenFever',
+  'turretDrop',
 ];

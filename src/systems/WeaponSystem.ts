@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
 import { Enemy } from '../entities/Enemy';
 import { sfxShoot } from '../audio/sfx';
+import { applyGlow } from './NeonFX';
 import type { RunMods } from './RunMods';
 import type { Rng } from '../core/Rng';
 
@@ -34,6 +35,16 @@ export interface EnemyGridProvider {
   (): SpatialGrid<Enemy> | null;
 }
 
+interface TracerSegment {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  color: number;
+  // Seconds since the tracer fired (drives alpha fade).
+  age: number;
+}
+
 export class WeaponSystem {
   private scene: Phaser.Scene;
   private getPlayer: PlayerPositionProvider;
@@ -44,6 +55,13 @@ export class WeaponSystem {
   // free in the hot path. Mutated each call; do not hold references.
   private gridQueryScratch: Enemy[] = [];
   private fireTimer = 0;
+  // Pooled tracer renderer — a single Graphics object that redraws all active
+  // tracer segments each frame instead of allocating a fresh Graphics per
+  // shot. At 0.06s fire cooldown with multiple targets, the old per-shot
+  // alloc path was ~80-120 Graphics/sec on Chromebooks.
+  private tracerGfx: Phaser.GameObjects.Graphics | null = null;
+  private tracers: TracerSegment[] = [];
+  private tracerFadeSec = 0.15;
   private damageLevel = 0;
   private damageMult = 1;
   private fireRateMult = 1;
@@ -108,6 +126,8 @@ export class WeaponSystem {
   // are processed.
   update(dt: number): WeaponHit[] {
     this.fireTimer = Math.max(0, this.fireTimer - dt);
+    // Age + render existing tracers regardless of whether we fire this tick.
+    this.tickTracers(dt);
     if (this.fireTimer > 0) return [];
 
     // Effective target count = base × (1 + splitShot) + pierce + bonusTargets.
@@ -187,27 +207,68 @@ export class WeaponSystem {
   // Public so RaidScene can render a tracer for each chained enemy hit by
   // Drone Swarm. Source is the previous hit position rather than the player.
   drawTracer(fromX: number, fromY: number, toX: number, toY: number, color?: number): void {
-    const g = this.scene.add.graphics();
-    g.lineStyle(2, color ?? Balance.colors.bulletTracer, 1);
-    g.lineBetween(fromX, fromY, toX, toY);
-    this.scene.tweens.add({
-      targets: g,
-      alpha: 0,
-      duration: Balance.ui.tracerFadeMs,
-      onComplete: () => g.destroy(),
+    this.tracers.push({
+      fromX,
+      fromY,
+      toX,
+      toY,
+      color: color ?? Balance.colors.bulletTracer,
+      age: 0,
     });
   }
 
   private fireTracer(tx: number, ty: number): void {
     const p = this.getPlayer();
-    const g = this.scene.add.graphics();
-    g.lineStyle(2, Balance.colors.bulletTracer, 1);
-    g.lineBetween(p.x, p.y, tx, ty);
-    this.scene.tweens.add({
-      targets: g,
-      alpha: 0,
-      duration: Balance.ui.tracerFadeMs,
-      onComplete: () => g.destroy(),
-    });
+    this.drawTracer(p.x, p.y, tx, ty, Balance.colors.bulletTracer);
+  }
+
+  // Render all active tracer segments into a single pooled Graphics object.
+  // Each segment fades alpha from 1 → 0 over tracerFadeSec, then is dropped.
+  // The Graphics is created on first use so test contexts without a scene
+  // canvas don't have to construct one.
+  private tickTracers(dt: number): void {
+    if (this.tracers.length === 0 && !this.tracerGfx) return;
+    if (!this.tracerGfx) {
+      this.tracerGfx = this.scene.add.graphics();
+      this.tracerGfx.setDepth(4);
+      this.tracerFadeSec = Balance.ui.tracerFadeMs / 1000;
+      applyGlow(this.tracerGfx, Balance.colors.bulletTracer, 4, 0);
+    }
+    const fade = this.tracerFadeSec;
+    // Compact in-place: keep tracers whose age < fade duration.
+    let write = 0;
+    for (let read = 0; read < this.tracers.length; read++) {
+      const t = this.tracers[read];
+      t.age += dt;
+      if (t.age < fade) {
+        this.tracers[write++] = t;
+      }
+    }
+    this.tracers.length = write;
+
+    const g = this.tracerGfx;
+    g.clear();
+    // Render each tracer as a stack of three lines: outer halo (thick, low
+    // alpha), mid stroke, and bright white core. Combined with the fading
+    // age they read as a tapered laser bolt rather than a hairline.
+    for (const t of this.tracers) {
+      const alpha = 1 - t.age / fade;
+      g.lineStyle(6, t.color, alpha * 0.30);
+      g.lineBetween(t.fromX, t.fromY, t.toX, t.toY);
+      g.lineStyle(3, t.color, alpha * 0.85);
+      g.lineBetween(t.fromX, t.fromY, t.toX, t.toY);
+      g.lineStyle(1, 0xffffff, alpha);
+      g.lineBetween(t.fromX, t.fromY, t.toX, t.toY);
+    }
+  }
+
+  // Called by RaidScene.shutdown so the Graphics object doesn't outlive
+  // the scene.
+  destroy(): void {
+    if (this.tracerGfx) {
+      this.tracerGfx.destroy();
+      this.tracerGfx = null;
+    }
+    this.tracers.length = 0;
   }
 }

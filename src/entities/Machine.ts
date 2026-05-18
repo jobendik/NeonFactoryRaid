@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import { applyGlow } from '../systems/NeonFX';
 
 export const GENERATOR_TEXTURE_KEY = 'machine-generator';
 export const GENERATOR_SMOKE_TEXTURE_KEY = 'machine-generator-smoke';
@@ -32,6 +33,7 @@ export class Generator {
     this.slotIndex = slotIndex;
     this.sprite = scene.add.sprite(x, y, GENERATOR_TEXTURE_KEY);
     this.sprite.setDepth(2);
+    applyGlow(this.sprite, Balance.colors.player, 5, 0);
     this.intervalSec = intervalSec;
     // Stagger so two generators don't drop on the same frame.
     this.timer = Math.random() * intervalSec;
@@ -132,38 +134,97 @@ export class Generator {
 
   static ensureSmokeTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(GENERATOR_SMOKE_TEXTURE_KEY)) return;
-    const dim = 12;
-    const g = scene.add.graphics();
-    g.fillStyle(0xffffff, 1);
-    g.fillCircle(dim / 2, dim / 2, dim / 2 - 1);
-    g.generateTexture(GENERATOR_SMOKE_TEXTURE_KEY, dim, dim);
-    g.destroy();
+    const dim = 24;
+    const tex = scene.textures.createCanvas(GENERATOR_SMOKE_TEXTURE_KEY, dim, dim);
+    if (!tex) return;
+    const ctx = tex.context;
+    const grad = ctx.createRadialGradient(dim / 2, dim / 2, 0, dim / 2, dim / 2, dim / 2);
+    grad.addColorStop(0, 'rgba(255,255,255,0.85)');
+    grad.addColorStop(0.4, 'rgba(255,255,255,0.45)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, dim, dim);
+    tex.refresh();
   }
 
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(GENERATOR_TEXTURE_KEY)) return;
     const dim = Balance.factory.generatorSize;
-    const g = scene.add.graphics();
-    // Outer chassis
-    g.fillStyle(0x141d2a, 1);
-    g.fillRoundedRect(0, 0, dim, dim, 6);
-    g.lineStyle(2, Balance.colors.player, 0.85);
-    g.strokeRoundedRect(0, 0, dim, dim, 6);
-    // Sine-wave indicator inside per §8.3
-    g.lineStyle(2, Balance.colors.player, 1);
+    const tex = scene.textures.createCanvas(GENERATOR_TEXTURE_KEY, dim, dim);
+    if (!tex) return;
+    const ctx = tex.context;
     const cx = dim / 2;
     const cy = dim / 2;
-    const w = dim - 14;
-    g.beginPath();
-    for (let i = 0; i <= 32; i++) {
-      const t = i / 32;
+    // Cyan back-glow so the chassis reads as "powered on" from afar.
+    const halo = ctx.createRadialGradient(cx, cy, dim * 0.2, cx, cy, dim * 0.65);
+    halo.addColorStop(0, 'rgba(34, 246, 255, 0.35)');
+    halo.addColorStop(1, 'rgba(34, 246, 255, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, dim, dim);
+    // Chassis — slate body with metallic gradient.
+    const chassis = ctx.createLinearGradient(0, 0, 0, dim);
+    chassis.addColorStop(0, '#1c2a3a');
+    chassis.addColorStop(0.5, '#101724');
+    chassis.addColorStop(1, '#070c14');
+    ctx.fillStyle = chassis;
+    roundRect(ctx, 3, 3, dim - 6, dim - 6, 8);
+    ctx.fill();
+    // Outline + inner panel inset
+    ctx.strokeStyle = 'rgba(34, 246, 255, 0.95)';
+    ctx.lineWidth = 2;
+    roundRect(ctx, 3, 3, dim - 6, dim - 6, 8);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(34, 246, 255, 0.25)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, 8, 8, dim - 16, dim - 16, 5);
+    ctx.stroke();
+    // Bolt heads in corners.
+    ctx.fillStyle = '#22f6ff';
+    for (const [bx, by] of [[8, 8], [dim - 8, 8], [8, dim - 8], [dim - 8, dim - 8]] as const) {
+      ctx.beginPath();
+      ctx.arc(bx, by, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Sine wave indicator with glow.
+    const w = dim - 22;
+    ctx.save();
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#22f6ff';
+    ctx.strokeStyle = '#22f6ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
       const px = cx - w / 2 + t * w;
       const py = cy + Math.sin(t * Math.PI * 4) * 8;
-      if (i === 0) g.moveTo(px, py);
-      else g.lineTo(px, py);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
     }
-    g.strokePath();
-    g.generateTexture(GENERATOR_TEXTURE_KEY, dim, dim);
-    g.destroy();
+    ctx.stroke();
+    ctx.restore();
+    // Top status LED.
+    const led = ctx.createRadialGradient(cx, 11, 0, cx, 11, 4);
+    led.addColorStop(0, '#ffffff');
+    led.addColorStop(0.5, '#72ff9f');
+    led.addColorStop(1, 'rgba(114, 255, 159, 0)');
+    ctx.fillStyle = led;
+    ctx.beginPath();
+    ctx.arc(cx, 11, 4, 0, Math.PI * 2);
+    ctx.fill();
+    tex.refresh();
   }
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }

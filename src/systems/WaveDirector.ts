@@ -52,6 +52,13 @@ export class WaveDirector {
   // roll. spawnInterval picks one every infestSpawnIntervalSec seconds.
   private infestationWave = false;
   private infestSpawnTimer = 0;
+  // Suggestions audit — Loot Goblin appears on a random cadence per raid.
+  // When the timer expires we spawn one and re-roll. Independent of the
+  // normal spawn director.
+  private lootGoblinTimer = 0;
+  // Extract Jammer only spawns after extraction opens. RaidScene flips this
+  // flag via setExtractionOpen().
+  private extractionOpen = false;
 
   constructor(group: Phaser.GameObjects.Group, getPlayerPos: PlayerPositionProvider, rng: Rng) {
     this.group = group;
@@ -70,6 +77,15 @@ export class WaveDirector {
     this.eliteSpawned = false;
     this.infestationWave = !!opts?.infestationWave;
     this.infestSpawnTimer = Balance.infestation.firstWaveDelaySec;
+    this.lootGoblinTimer = this.rng.range(
+      Balance.enemies.lootGoblin.spawnIntervalMin,
+      Balance.enemies.lootGoblin.spawnIntervalMax,
+    );
+    this.extractionOpen = false;
+  }
+
+  setExtractionOpen(open: boolean): void {
+    this.extractionOpen = open;
   }
 
   stop(): void {
@@ -95,6 +111,32 @@ export class WaveDirector {
         this.spawnOne('infested');
         this.infestSpawnTimer = Balance.infestation.spawnIntervalSec;
       }
+    }
+
+    // Loot Goblin (§14.1): independent timer. Re-rolled each time.
+    this.lootGoblinTimer -= dt;
+    if (this.lootGoblinTimer <= 0) {
+      this.spawnOne('lootGoblin');
+      this.lootGoblinTimer = this.rng.range(
+        Balance.enemies.lootGoblin.spawnIntervalMin,
+        Balance.enemies.lootGoblin.spawnIntervalMax,
+      );
+    }
+
+    // Bomber (§7.3 / §14.1): per-second chance scaled by greed step, on top
+    // of the normal wave. Skip on first few seconds so it doesn't interrupt
+    // the FTUE rhythm.
+    if (this.elapsed > 6) {
+      const bomberChance =
+        Balance.enemies.bomber.spawnChancePerSecByGreedStep[this.greedStep] ?? 0;
+      if (bomberChance > 0 && this.rng.next() < bomberChance * dt) {
+        this.spawnOne('bomber');
+      }
+    }
+
+    // Extract Jammer (§14.1): only while extraction is open, low cadence.
+    if (this.extractionOpen && this.elapsed > 1 && this.rng.next() < 0.4 * dt) {
+      this.spawnOne('extractJammer');
     }
 
     const esc = Balance.raid.greedEscalation[this.greedStep];
@@ -131,14 +173,20 @@ export class WaveDirector {
 
   private pickKind(): EnemyKind {
     // Weighted roll across §7.2 base spawn weights, with the §7.3 tank-rush
-    // factor lifting share from Grunt → Tank as greed escalates. Real Bomber
-    // type for greed x2 is deferred to a content pass; for now the rush is
-    // expressed as a higher Tank share.
-    // TODO(content): Bomber spawn slot at greed x2 (§14.1 / §7.3).
+    // factor lifting share from Grunt → Tank as greed escalates. Splitter
+    // unlocks at greed step 1+ and Shield Carrier at step 2+ per Balance.
     const w = Balance.enemies.weights;
     const tankRush = Balance.raid.greedEscalation[this.greedStep].tankRushFactor;
     const gruntShare = Math.max(0.05, w.grunt - tankRush);
     const tankShare = w.tank + tankRush;
+    const splitterShare =
+      this.greedStep >= Balance.enemies.splitter.unlockAtGreedStep
+        ? Balance.enemies.splitter.spawnWeight
+        : 0;
+    const carrierShare =
+      this.greedStep >= Balance.enemies.shieldCarrier.unlockAtGreedStep
+        ? Balance.enemies.shieldCarrier.spawnWeight
+        : 0;
     const r = this.rng.next();
     let acc = gruntShare;
     if (r < acc) return 'grunt';
@@ -148,7 +196,10 @@ export class WaveDirector {
     if (r < acc) return 'shooter';
     acc += tankShare;
     if (r < acc) return 'tank';
-    // Elite slot - random elites are reserved for the boss-wave latch.
+    acc += splitterShare;
+    if (r < acc) return 'splitter';
+    acc += carrierShare;
+    if (r < acc) return 'shieldCarrier';
     return 'tank';
   }
 

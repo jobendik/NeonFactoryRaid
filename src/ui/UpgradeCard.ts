@@ -1,82 +1,84 @@
-import Phaser from 'phaser';
+import type Phaser from 'phaser';
 import { UpgradeDefs, nextMilestone, type UpgradeKey } from '../config/UpgradeDefs';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
+import { UIOverlay, el } from './overlay/UIOverlay';
+import { upgradeIcon } from './overlay/Icons';
 
-// Upgrade card per blueprint §21.4. Each card renders the four lines the
-// blueprint mandates: label, level transition, next-milestone hint, cost.
-// The card subscribes to nothing - it's pulled by the panel each refresh().
+// Upgrade card per blueprint §21.4. Each card renders four data points:
+// label, level transition, next-milestone hint, cost.
+//
+// M-overhaul: cards are now styled HTML rows mounted into a shared sidebar
+// container per scene. The constructor signature is unchanged for backward
+// compatibility — the (x, y) positioning args are ignored; cards flow in the
+// sidebar via CSS flexbox.
 
-const CARD_W = 280;
-const CARD_H = 86;
-const PADDING = 10;
+interface SidebarEntry {
+  container: HTMLElement;
+  cards: Set<UpgradeCard>;
+  remove: () => void;
+}
+
+const sidebars = new WeakMap<Phaser.Scene, SidebarEntry>();
+
+function ensureSidebar(scene: Phaser.Scene): SidebarEntry {
+  let entry = sidebars.get(scene);
+  if (entry) return entry;
+
+  const container = el('div', 'nfr-sidepanel');
+  const header = el('div', 'nfr-sidepanel__title');
+  header.textContent = 'FACTORY UPGRADES';
+  container.appendChild(header);
+
+  const remove = UIOverlay.mountHud(scene, container);
+  entry = { container, cards: new Set(), remove };
+  sidebars.set(scene, entry);
+  return entry;
+}
 
 export class UpgradeCard {
   private key: UpgradeKey;
-  private container: Phaser.GameObjects.Container;
-  private bg: Phaser.GameObjects.Rectangle;
-  private labelText: Phaser.GameObjects.Text;
-  private levelText: Phaser.GameObjects.Text;
-  private milestoneText: Phaser.GameObjects.Text;
-  private buyBg: Phaser.GameObjects.Rectangle;
-  private buyText: Phaser.GameObjects.Text;
+  private scene: Phaser.Scene;
+  private root: HTMLElement;
+  private labelEl: HTMLElement;
+  private levelEl: HTMLElement;
+  private hintEl: HTMLElement;
+  private costEl: HTMLButtonElement;
   private onPurchase?: () => void;
 
-  constructor(scene: Phaser.Scene, key: UpgradeKey, x: number, y: number) {
+  constructor(scene: Phaser.Scene, key: UpgradeKey, _x: number, _y: number) {
+    this.scene = scene;
     this.key = key;
-    this.container = scene.add.container(x, y);
-    this.container.setScrollFactor(0).setDepth(2000);
 
-    this.bg = scene.add.rectangle(0, 0, CARD_W, CARD_H, 0x101820, 0.92);
-    this.bg.setStrokeStyle(1, 0x22f6ff, 0.55);
-    this.bg.setOrigin(0, 0);
+    const entry = ensureSidebar(scene);
+    entry.cards.add(this);
 
-    this.labelText = scene.add.text(PADDING, PADDING, '', {
-      fontFamily: 'monospace',
-      fontSize: '15px',
-      color: '#22f6ff',
-    });
+    this.root = el('div', 'nfr-upgrade');
 
-    this.levelText = scene.add.text(PADDING, PADDING + 22, '', {
-      fontFamily: 'monospace',
-      fontSize: '13px',
-      color: '#ffffff',
-    });
+    const iconWrap = el('div', 'nfr-upgrade__icon');
+    iconWrap.innerHTML = upgradeIcon(key);
+    this.root.appendChild(iconWrap);
 
-    this.milestoneText = scene.add.text(PADDING, PADDING + 42, '', {
-      fontFamily: 'monospace',
-      fontSize: '11px',
-      color: '#888888',
-    });
+    const main = el('div', 'nfr-upgrade__main');
+    this.labelEl = el('div', 'nfr-upgrade__label');
+    this.levelEl = el('div', 'nfr-upgrade__level');
+    this.hintEl  = el('div', 'nfr-upgrade__hint');
+    main.appendChild(this.labelEl);
+    main.appendChild(this.levelEl);
+    main.appendChild(this.hintEl);
+    this.root.appendChild(main);
 
-    const buyW = 86;
-    const buyH = 28;
-    const buyX = CARD_W - PADDING - buyW;
-    const buyY = CARD_H - PADDING - buyH;
-    this.buyBg = scene.add.rectangle(buyX, buyY, buyW, buyH, 0x22f6ff, 1);
-    this.buyBg.setStrokeStyle(1, 0xffffff, 0.85);
-    this.buyBg.setOrigin(0, 0);
-    this.buyBg.setInteractive({ useHandCursor: true });
-    this.buyBg.on('pointerdown', () => {
+    this.costEl = document.createElement('button');
+    this.costEl.type = 'button';
+    this.costEl.className = 'nfr-upgrade__cost';
+    this.costEl.addEventListener('click', () => {
       if (UpgradeSystem.canAfford(this.key) && UpgradeSystem.purchase(this.key)) {
         this.refresh();
         if (this.onPurchase) this.onPurchase();
       }
     });
-    this.buyText = scene.add.text(buyX + buyW / 2, buyY + buyH / 2, '', {
-      fontFamily: 'monospace',
-      fontSize: '13px',
-      color: '#000000',
-    });
-    this.buyText.setOrigin(0.5);
+    this.root.appendChild(this.costEl);
 
-    this.container.add([
-      this.bg,
-      this.labelText,
-      this.levelText,
-      this.milestoneText,
-      this.buyBg,
-      this.buyText,
-    ]);
+    entry.container.appendChild(this.root);
   }
 
   setOnPurchase(fn: () => void): void {
@@ -89,27 +91,29 @@ export class UpgradeCard {
     const cost = UpgradeSystem.getNextCost(this.key);
     const affordable = UpgradeSystem.canAfford(this.key);
 
-    this.labelText.setText(def.label);
-    this.levelText.setText(`Lv. ${level} → ${level + 1}`);
+    this.labelEl.textContent = def.label;
+    this.levelEl.textContent = `Lv. ${level} → ${level + 1}`;
 
     const ms = nextMilestone(this.key, level);
-    if (ms) {
-      this.milestoneText.setText(`Lv. ${ms.level}: ${ms.text}`);
-    } else {
-      this.milestoneText.setText(def.description);
-    }
+    this.hintEl.textContent = ms ? `Lv. ${ms.level}: ${ms.text}` : def.description;
 
-    this.buyText.setText(`${cost} ◆`);
+    this.costEl.textContent = `${cost} ◆`;
+    this.costEl.classList.toggle('is-disabled', !affordable);
     if (affordable) {
-      this.buyBg.setFillStyle(0x22f6ff, 1);
-      this.buyText.setColor('#000000');
+      this.root.classList.add('is-affordable');
     } else {
-      this.buyBg.setFillStyle(0x444444, 1);
-      this.buyText.setColor('#888888');
+      this.root.classList.remove('is-affordable');
     }
   }
 
   destroy(): void {
-    this.container.destroy(true);
+    this.root.remove();
+    const entry = sidebars.get(this.scene);
+    if (!entry) return;
+    entry.cards.delete(this);
+    if (entry.cards.size === 0) {
+      entry.remove();
+      sidebars.delete(this.scene);
+    }
   }
 }

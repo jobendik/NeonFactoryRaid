@@ -24,6 +24,24 @@ import { todayUtcDate } from '../config/QuestDefs';
 import { AdManager } from '../platform/AdManager';
 import { CosmeticSystem } from '../systems/CosmeticSystem';
 import { SeasonSystem } from '../systems/SeasonSystem';
+import { loadScrapyardScene } from '../main';
+import { openRefineryPanel, openMissionBoard, openPrestigePanel } from '../ui/FactoryPanels';
+import { ensureCommonFX, applyGlow, FACTORY_BG_KEY, VIGNETTE_KEY } from '../systems/NeonFX';
+import { RetentionSystem } from '../systems/RetentionSystem';
+import { WelcomeBack } from '../ui/WelcomeBack';
+import { UIOverlay as nfrUIOverlay, el as nfrEl } from '../ui/overlay/UIOverlay';
+
+// HTML factory for one button in the left-edge action column. The variant
+// drives both color and (for hover) the glow tint. Caller wires the click
+// handler.
+function nfrActionBtn(label: string, variant: 'cyan' | 'gold' | 'violet' | 'red' | 'green', onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `nfr-action ${variant === 'cyan' ? '' : variant}`.trim();
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
 
 // FactoryScene per blueprint §8. The factory is a "living place": the player
 // physically walks around to pick up the scrap dropping out of generators, and
@@ -86,10 +104,12 @@ export class FactoryScene extends Phaser.Scene {
   // Sits on the left edge below the FPS counter. Refreshed on any state
   // change (boost activated, infestation cleared, daily crate claimed) and
   // re-ticked each second so the FACTORY BOOST cooldown label updates.
-  private adPanelObjects: Phaser.GameObjects.GameObject[] = [];
+  //
+  // M-overhaul: the ad panel is now an HTML overlay column (CSS `.nfr-actioncol`).
+  // `adPanelDismiss` tears it down on rebuild / scene shutdown.
+  private adPanelDismiss: (() => void) | null = null;
   private adPanelLastSecond = -1;
-  private factoryBoostLabel: Phaser.GameObjects.Text | null = null;
-  private factoryBoostBg: Phaser.GameObjects.Rectangle | null = null;
+  private factoryBoostBtn: HTMLButtonElement | null = null;
   // Pinned try-out toast (shown briefly after the player accepts the
   // OPERATOR TRY-OUT ad). Destroyed automatically.
   private tryOutToast: Phaser.GameObjects.Text | null = null;
@@ -340,29 +360,13 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   private buildUpgradePanel(): void {
-    const panelW = 300;
-    const x = this.scale.width - panelW;
-    const startY = 100;
-    const rowGap = 96;
-
-    // Panel header
-    const header = this.add
-      .text(x + 10, startY - 30, 'FACTORY UPGRADES', {
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#22f6ff',
-      })
-      .setScrollFactor(0)
-      .setDepth(2000);
-    this.milestoneVisuals.push(header);
-
-    // Progressive reveal per blueprint §5.3 - only render rows the FTUE has
-    // unlocked. The list is filtered before layout so visible rows stack
-    // flush, with no holes for locked tracks.
+    // M-overhaul: the upgrade panel is now an HTML+CSS sidebar (UpgradeCard
+    // mounts each row into a shared overlay container — see UpgradeCard.ts).
+    // Phaser-side x/y coordinates are ignored; sidebar layout is CSS-driven.
     const visibleKeys = UPGRADE_KEYS.filter(k => this.isUpgradeUnlocked(k));
     for (let i = 0; i < visibleKeys.length; i++) {
       const key = visibleKeys[i];
-      const card = new UpgradeCard(this, key, x + 10, startY + i * rowGap);
+      const card = new UpgradeCard(this, key, 0, 0);
       card.refresh();
       this.upgradeCards.push(card);
     }
@@ -419,38 +423,16 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   private showOfflineToast(): void {
+    // Retention pass — the silent boot has been replaced with a sequenced
+    // welcome-back ceremony. WelcomeBack pulls the pending offline scrap
+    // (transient flag in saveSystem) plus the boot-banner queue
+    // (comeback / payday / streak warnings) and stages them with a count-up
+    // animation, a streak chip, and a payday badge. Idempotent across
+    // FactoryScene visits — banners are consumed once per session.
     const amount = saveSystem.consumePendingOfflineScrap();
-    if (amount <= 0) return;
-    const toast = this.add
-      .text(this.scale.width / 2, 60, `+${amount} ${Strings.summaryScrap} from offline factory`, {
-        fontFamily: 'monospace',
-        fontSize: '18px',
-        color: '#22f6ff',
-        stroke: '#000000',
-        strokeThickness: 4,
-        backgroundColor: '#0a1014',
-        padding: { x: 14, y: 8 },
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(2100)
-      .setAlpha(0);
-
-    this.tweens.add({
-      targets: toast,
-      alpha: 1,
-      y: 80,
-      duration: 320,
-      ease: 'Cubic.easeOut',
-    });
-    this.time.delayedCall(4200, () => {
-      this.tweens.add({
-        targets: toast,
-        alpha: 0,
-        duration: 500,
-        onComplete: () => toast.destroy(),
-      });
-    });
+    const banners = RetentionSystem.consumeBootBanners();
+    if (amount <= 0 && banners.length === 0 && RetentionSystem.currentStreakDay() === 0) return;
+    WelcomeBack.show(this, { offlineScrap: amount, banners });
   }
 
   private spawnMilestoneVisuals(): void {
@@ -553,6 +535,10 @@ export class FactoryScene extends Phaser.Scene {
   private isScrapyardUnlocked(): boolean {
     const save = saveSystem.get();
     if (!save.tutorialDone) return false;
+    // Suggestions audit — Scrapyard requires pointer lock + mouse look,
+    // which is desktop-only. Hide the pad on touch devices so mobile players
+    // don't tap into an unresponsive 3D scene.
+    if (typeof window !== 'undefined' && 'ontouchstart' in window) return false;
     const realRaids = Math.max(0, save.raidsCompleted - 1);
     return realRaids >= Balance.scrapyard.unlockAfterRaids;
   }
@@ -568,7 +554,14 @@ export class FactoryScene extends Phaser.Scene {
       this.scrapDeployState = 'holding';
       if (this.scrapDeployHold >= Balance.factory.scrapyardPad.holdSec) {
         this.scrapDeployState = 'launching';
-        this.scene.start('ScrapyardScene');
+        // Lazy-import the 3D mode the first time it's entered. While the
+        // chunk loads (~150 KB gzip, typically <500ms even on 4G), the pad
+        // stays in the launching state — the player just sees the hold
+        // animation. On a touch device we hide the pad entirely (see
+        // drawScrapyardPad) so this code path only runs on desktop.
+        void loadScrapyardScene().then(() => {
+          this.scene.start('ScrapyardScene');
+        });
         return;
       }
     } else {
@@ -579,12 +572,34 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   private drawBackground(): void {
+    ensureCommonFX(this);
     const wb = Balance.player.worldBounds;
-    const grid = this.add.graphics();
-    // M23 — equipped factory theme tints the grid lines. Defaults to the
-    // base background color so unequipped saves render unchanged.
+    const camW = this.scale.width;
+    const camH = this.scale.height;
+    const worldW = wb.maxX - wb.minX;
+    const worldH = wb.maxY - wb.minY;
+
+    // Camera-fixed factory floor tile — industrial hazard stripes + rivets.
+    const floor = this.add
+      .tileSprite(0, 0, camW + 32, camH + 32, FACTORY_BG_KEY)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(-100);
+    void floor;
+
+    // World-tiled factory floor (large) so the player sees the same surface
+    // wherever they walk. Lower alpha than the camera-fixed layer so the
+    // bloom shows through.
+    const worldFloor = this.add
+      .tileSprite(wb.minX, wb.minY, worldW, worldH, FACTORY_BG_KEY)
+      .setOrigin(0, 0)
+      .setAlpha(0.55)
+      .setDepth(-90);
+    void worldFloor;
+
     const themeColor = CosmeticSystem.getEquippedThemeColor() || Balance.colors.background;
-    grid.lineStyle(1, themeColor, Balance.ui.gridAlpha);
+    const grid = this.add.graphics();
+    grid.lineStyle(1, themeColor, 0.22);
     const step = Balance.ui.gridStep;
     for (let x = wb.minX; x <= wb.maxX; x += step) {
       grid.moveTo(x, wb.minY);
@@ -595,6 +610,22 @@ export class FactoryScene extends Phaser.Scene {
       grid.lineTo(wb.maxX, y);
     }
     grid.strokePath();
+    grid.setDepth(-10);
+
+    // Glowing arena frame so the factory's bounds read clearly.
+    const bounds = this.add.graphics();
+    bounds.lineStyle(3, themeColor, 0.85);
+    bounds.strokeRect(wb.minX, wb.minY, worldW, worldH);
+    bounds.setDepth(-8);
+    applyGlow(bounds, themeColor, 5, 0);
+
+    // Vignette overlay focuses attention on the player.
+    const vignette = this.add
+      .image(camW / 2, camH / 2, VIGNETTE_KEY)
+      .setScrollFactor(0)
+      .setDepth(1100)
+      .setAlpha(0.45);
+    void vignette;
   }
 
   private drawPad(): void {
@@ -704,6 +735,40 @@ export class FactoryScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2050);
     this.operatorPanelObjects.push(header);
+
+    // Retention pass — "next operator chase" line. Blueprint §11.2 calls this
+    // out as the Day-2 retention driver. Show progress as "VANTA  48/50
+    // Cores" so the player always has a visible meta-loop reward 1-2 raids
+    // away. Affordable → green text + bright pulse to push the click.
+    const almost = RetentionSystem.almostThere();
+    if (almost.nextOperator) {
+      const next = almost.nextOperator;
+      const def = OperatorDefs[next.id];
+      const text = `${Strings.almostNextOperatorPrefix}${def.name}${Strings.almostNextOperatorMid}${next.cores}/${next.cost}${Strings.almostNextOperatorSuffix}`;
+      const color = next.ready ? '#72ff9f' : '#ffd75a';
+      const teaser = this.add
+        .text(this.scale.width / 2, y - 36, text, {
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          color,
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(2050);
+      this.operatorPanelObjects.push(teaser);
+      if (next.ready) {
+        this.tweens.add({
+          targets: teaser,
+          alpha: { from: 1, to: 0.5 },
+          duration: 700,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      }
+    }
 
     for (let i = 0; i < OPERATOR_ORDER.length; i++) {
       const id = OPERATOR_ORDER[i];
@@ -1189,25 +1254,18 @@ export class FactoryScene extends Phaser.Scene {
       seedBg.on('pointerdown', () => this.launchDailySeedRaid());
     }
 
-    // Leaderboard button — top-right corner, viewport-pinned.
-    const lbBtn = this.add
-      .rectangle(this.scale.width - 110, 84, 200, 30, 0x101820, 0.95)
-      .setStrokeStyle(2, 0xa76cff, 0.85)
-      .setScrollFactor(0)
-      .setDepth(2050)
-      .setInteractive({ useHandCursor: true });
-    this.dailySeedObjects.push(lbBtn);
-    const lbLabel = this.add
-      .text(this.scale.width - 110, 84, Strings.leaderboardButton, {
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        color: '#a76cff',
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(2051);
-    this.dailySeedObjects.push(lbLabel);
-    lbBtn.on('pointerdown', () => this.openLeaderboard());
+    // Leaderboard button — top-right corner, viewport-pinned. HTML overlay
+    // styled via .nfr-topright-btn (neon violet pill matching the leaderboard
+    // panel theme).
+    const lbBtn = document.createElement('button');
+    lbBtn.type = 'button';
+    lbBtn.className = 'nfr-topright-btn';
+    lbBtn.textContent = Strings.leaderboardButton;
+    lbBtn.addEventListener('click', () => this.openLeaderboard());
+    const dismissLb = nfrUIOverlay.mountHud(this, lbBtn);
+    // Stash a Phaser-style teardown adapter in dailySeedObjects so
+    // destroyDailySeedAndLeaderboard() cleans it up uniformly.
+    this.dailySeedObjects.push({ destroy: dismissLb } as unknown as Phaser.GameObjects.GameObject);
   }
 
   private launchDailySeedRaid(): void {
@@ -1222,128 +1280,98 @@ export class FactoryScene extends Phaser.Scene {
       this.closeLeaderboard();
       return;
     }
-    const w = this.scale.width;
-    const h = this.scale.height;
 
-    const backdrop = this.add
-      .rectangle(0, 0, w, h, 0x000000, 0.7)
-      .setOrigin(0, 0)
-      .setScrollFactor(0)
-      .setDepth(3500)
-      .setInteractive();
-    this.leaderboardObjects.push(backdrop);
-    backdrop.on('pointerdown', () => this.closeLeaderboard());
+    const panel = nfrEl('div', 'nfr-panel violet');
+    panel.style.minWidth = '520px';
+    panel.style.padding = '28px 32px 24px';
 
-    const panelW = 460;
-    const panelH = 480;
-    const panel = this.add
-      .rectangle(w / 2, h / 2, panelW, panelH, 0x101820, 0.98)
-      .setStrokeStyle(3, 0xa76cff, 0.95)
-      .setScrollFactor(0)
-      .setDepth(3501);
-    this.leaderboardObjects.push(panel);
+    const title = nfrEl('h1', 'nfr-panel__title');
+    title.textContent = Strings.leaderboardTitle;
+    panel.appendChild(title);
 
-    this.leaderboardObjects.push(
-      this.add
-        .text(w / 2, h / 2 - panelH / 2 + 24, Strings.leaderboardTitle, {
-          fontFamily: 'monospace',
-          fontSize: '20px',
-          color: '#a76cff',
-          stroke: '#000000',
-          strokeThickness: 4,
-        })
-        .setOrigin(0.5, 0)
-        .setScrollFactor(0)
-        .setDepth(3502),
-    );
+    // Honest disclosure: until a real backend lands the panel shows the
+    // local player's own historical scores.
+    if (!LeaderboardSystem.hasBackend()) {
+      const note = nfrEl('div', 'nfr-panel__subtitle');
+      note.style.fontStyle = 'italic';
+      note.textContent = Strings.leaderboardLocalNote;
+      panel.appendChild(note);
+    }
+
+    const body = nfrEl('div', 'nfr-panel__body');
+    panel.appendChild(body);
 
     const entries = LeaderboardSystem.getTopEntries();
     if (entries.length === 0) {
-      this.leaderboardObjects.push(
-        this.add
-          .text(w / 2, h / 2, Strings.leaderboardEmpty, {
-            fontFamily: 'monospace',
-            fontSize: '13px',
-            color: '#88a0a8',
-          })
-          .setOrigin(0.5)
-          .setScrollFactor(0)
-          .setDepth(3502),
-      );
+      const empty = nfrEl('div', 'nfr-row__effect');
+      empty.style.textAlign = 'center';
+      empty.style.padding = '24px';
+      empty.textContent = Strings.leaderboardEmpty;
+      body.appendChild(empty);
     } else {
-      const startY = h / 2 - panelH / 2 + 70;
-      const rowH = 32;
       const today = todayUtcDate();
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
-        const ry = startY + i * rowH;
-        const rank = String(i + 1).padStart(2, ' ');
-        const dateLabel = e.date === today ? `${e.date} (TODAY)` : e.date;
-        this.leaderboardObjects.push(
-          this.add
-            .text(w / 2 - panelW / 2 + 30, ry, `#${rank}`, {
-              fontFamily: 'monospace',
-              fontSize: '14px',
-              color: '#ffd75a',
-            })
-            .setScrollFactor(0)
-            .setDepth(3502),
-        );
-        this.leaderboardObjects.push(
-          this.add
-            .text(w / 2 - panelW / 2 + 80, ry, dateLabel, {
-              fontFamily: 'monospace',
-              fontSize: '13px',
-              color: '#ffffff',
-            })
-            .setScrollFactor(0)
-            .setDepth(3502),
-        );
-        this.leaderboardObjects.push(
-          this.add
-            .text(w / 2 + panelW / 2 - 110, ry, `${e.score} ${Strings.summaryScrap}`, {
-              fontFamily: 'monospace',
-              fontSize: '13px',
-              color: '#22f6ff',
-            })
-            .setScrollFactor(0)
-            .setDepth(3502),
-        );
+        const row = nfrEl('div', 'nfr-row');
+        row.style.gridTemplateColumns = '46px 1fr auto auto';
+        row.style.alignItems = 'center';
+        row.style.gap = '12px';
+
+        const rank = nfrEl('div');
+        rank.style.fontFamily = 'var(--nfr-font-display)';
+        rank.style.fontSize = '15px';
+        rank.style.color = 'var(--nfr-gold)';
+        rank.style.textShadow = '0 0 6px var(--nfr-gold-glow)';
+        rank.textContent = `#${i + 1}`;
+        row.appendChild(rank);
+
+        const date = nfrEl('div');
+        date.style.fontFamily = 'var(--nfr-font-mono)';
+        date.style.fontSize = '13px';
+        date.style.color = 'var(--nfr-ink)';
+        date.textContent = e.date === today ? `${e.date} (TODAY)` : e.date;
+        row.appendChild(date);
+
+        const score = nfrEl('div');
+        score.style.fontFamily = 'var(--nfr-font-mono)';
+        score.style.fontWeight = '700';
+        score.style.fontSize = '14px';
+        score.style.color = 'var(--nfr-cyan)';
+        score.style.textShadow = '0 0 6px var(--nfr-cyan-glow)';
+        score.textContent = `${e.score} ${Strings.summaryScrap}`;
+        row.appendChild(score);
+
         if (e.isYou) {
-          this.leaderboardObjects.push(
-            this.add
-              .text(w / 2 + panelW / 2 - 40, ry, Strings.leaderboardYou, {
-                fontFamily: 'monospace',
-                fontSize: '12px',
-                color: '#72ff9f',
-              })
-              .setScrollFactor(0)
-              .setDepth(3502),
-          );
+          const you = nfrEl('div');
+          you.style.fontFamily = 'var(--nfr-font-display)';
+          you.style.fontSize = '11px';
+          you.style.letterSpacing = '0.18em';
+          you.style.color = 'var(--nfr-green)';
+          you.style.textShadow = '0 0 6px var(--nfr-green-glow)';
+          you.textContent = Strings.leaderboardYou;
+          row.appendChild(you);
+        } else {
+          row.appendChild(nfrEl('span'));
         }
+
+        body.appendChild(row);
       }
     }
 
-    const closeY = h / 2 + panelH / 2 - 36;
-    const closeBg = this.add
-      .rectangle(w / 2, closeY, 140, 36, 0xa76cff, 1)
-      .setStrokeStyle(2, 0xffffff, 0.9)
-      .setScrollFactor(0)
-      .setDepth(3502)
-      .setInteractive({ useHandCursor: true });
-    this.leaderboardObjects.push(closeBg);
-    this.leaderboardObjects.push(
-      this.add
-        .text(w / 2, closeY, Strings.leaderboardClose, {
-          fontFamily: 'monospace',
-          fontSize: '14px',
-          color: '#000000',
-        })
-        .setOrigin(0.5)
-        .setScrollFactor(0)
-        .setDepth(3503),
-    );
-    closeBg.on('pointerdown', () => this.closeLeaderboard());
+    const footer = nfrEl('div', 'nfr-panel__footer');
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'nfr-btn violet nfr-btn--lg';
+    closeBtn.textContent = Strings.leaderboardClose;
+    closeBtn.addEventListener('click', () => this.closeLeaderboard());
+    footer.appendChild(closeBtn);
+    panel.appendChild(footer);
+
+    const dismiss = nfrUIOverlay.mountModal(this, panel, {
+      dismissOnBackdrop: true,
+      onDismiss: () => { this.leaderboardObjects = []; },
+    });
+    this.leaderboardObjects.push({ destroy: dismiss } as unknown as Phaser.GameObjects.GameObject);
   }
 
   private closeLeaderboard(): void {
@@ -1357,96 +1385,102 @@ export class FactoryScene extends Phaser.Scene {
     this.closeLeaderboard();
   }
 
-  // M20 — left-edge rewarded-ad panel. Three buttons:
-  //   FACTORY BOOST  (gated on ftueUnlocks.factoryBoost; shows cooldown live)
+  // M20 — left-edge rewarded-ad / actions panel. Buttons:
+  //   FACTORY BOOST   (gated on ftueUnlocks.factoryBoost; shows cooldown live)
   //   CLEAR INFESTATION (visible only when any machines are infested)
-  //   DAILY CRATE (visible only when the player has raided today and not yet claimed)
-  // Each routes through AdManager.offer() which handles the modal + SDK call.
+  //   DAILY CRATE     (visible only when player has raided today + not claimed)
+  //   REFINERY        (always after tutorial)
+  //   CONTRACTS       (always after tutorial; shows badge when claimable)
+  //   PRESTIGE        (visible once threshold met or already prestiged once)
+  //
+  // M-overhaul: rebuilt as HTML+CSS column. Each button is a <button> with
+  // the .nfr-action class + a color variant; state styling (active / cooldown
+  // / disabled) is class-toggled, no manual fill/stroke updates.
   private buildAdPanel(): void {
     this.destroyAdPanel();
     const save = saveSystem.get();
-    const x = 12;
-    let y = 120;
-    const btnW = 220;
-    const btnH = 40;
-    const gap = 8;
+    const col = nfrEl('div', 'nfr-actioncol');
 
-    // FACTORY BOOST. Only visible once the FTUE has unlocked it (5+ raids).
+    // FACTORY BOOST.
     if (save.ftueUnlocks.factoryBoost) {
-      const fb = this.makeAdButton(x, y, btnW, btnH, this.factoryBoostLabelText(), 0xffd75a, () =>
+      this.factoryBoostBtn = nfrActionBtn(this.factoryBoostLabelText(), 'gold', () =>
         this.handleFactoryBoost(),
       );
-      this.factoryBoostBg = fb.bg;
-      this.factoryBoostLabel = fb.label;
-      this.adPanelObjects.push(fb.bg);
-      this.adPanelObjects.push(fb.label);
-      y += btnH + gap;
+      col.appendChild(this.factoryBoostBtn);
       this.applyFactoryBoostVisuals();
     } else {
-      this.factoryBoostBg = null;
-      this.factoryBoostLabel = null;
+      this.factoryBoostBtn = null;
     }
 
-    // CLEAR INFESTATION — replaces the previous M20 stub. Routes to the
-    // existing InfestationSystem.clearAllInfestation() on grant.
+    // CLEAR INFESTATION.
     if (InfestationSystem.hasInfestation()) {
-      const ci = this.makeAdButton(x, y, btnW, btnH, Strings.infestationClearAd, 0xff416b, () =>
+      col.appendChild(nfrActionBtn(Strings.infestationClearAd, 'red', () =>
         this.handleClearInfestation(),
-      );
-      this.adPanelObjects.push(ci.bg);
-      this.adPanelObjects.push(ci.label);
-      y += btnH + gap;
+      ));
     }
 
-    // DAILY CRATE — eligibility means "raided today AND not yet claimed".
-    // If already claimed, render a passive label instead so the player sees
-    // their progression (claimed → bare label, becomes button again next day).
+    // DAILY CRATE (eligible) / claimed label.
     if (save.tutorialDone && AdManager.isDailyCrateEligible()) {
-      const dc = this.makeAdButton(x, y, btnW, btnH, Strings.adDailyCrateButton, 0xa76cff, () =>
+      col.appendChild(nfrActionBtn(Strings.adDailyCrateButton, 'violet', () =>
         this.handleDailyCrate(),
-      );
-      this.adPanelObjects.push(dc.bg);
-      this.adPanelObjects.push(dc.label);
-      y += btnH + gap;
+      ));
     } else if (save.tutorialDone && AdManager.isDailyCrateClaimedToday()) {
-      const label = this.add
-        .text(x, y, Strings.adDailyCrateClaimed, {
-          fontFamily: 'monospace',
-          fontSize: '11px',
-          color: '#666666',
-        })
-        .setScrollFactor(0)
-        .setDepth(2051);
-      this.adPanelObjects.push(label);
-      y += 18 + gap;
+      const claimed = nfrEl('div', 'nfr-action__sub');
+      claimed.textContent = Strings.adDailyCrateClaimed;
+      col.appendChild(claimed);
     }
+
+    // REFINERY / CONTRACTS / PRESTIGE.
+    if (save.tutorialDone) {
+      col.appendChild(nfrActionBtn(Strings.refineryButton, 'violet', () => openRefineryPanel(this)));
+
+      const contractsBtn = nfrActionBtn(Strings.missionBoardTitle, 'gold', () => openMissionBoard(this));
+      const claimable = RetentionSystem.almostThere().missionsReadyToClaim;
+      if (claimable > 0) {
+        const badge = nfrEl('span', 'nfr-action__badge');
+        badge.textContent = String(claimable);
+        contractsBtn.appendChild(badge);
+      }
+      col.appendChild(contractsBtn);
+
+      const eligible =
+        save.upgrades.gen >= Balance.prestige.minGenLevel && save.cores >= Balance.prestige.minCores;
+      if (eligible || save.prestige.cyberCores > 0) {
+        col.appendChild(nfrActionBtn(Strings.prestigeButton, 'red', () =>
+          openPrestigePanel(this, () => this.buildAdPanel()),
+        ));
+      }
+    }
+
+    this.adPanelDismiss = nfrUIOverlay.mountHud(this, col);
   }
 
   private destroyAdPanel(): void {
-    for (const o of this.adPanelObjects) o.destroy();
-    this.adPanelObjects = [];
-    this.factoryBoostBg = null;
-    this.factoryBoostLabel = null;
+    this.adPanelDismiss?.();
+    this.adPanelDismiss = null;
+    this.factoryBoostBtn = null;
   }
 
   // Per-frame: refresh the FACTORY BOOST label so the cooldown ticks live
-  // (1-second granularity). Bails on no-button / no-elapsed-second to keep
-  // the work minimal.
+  // (1-second granularity).
   private tickAdPanel(): void {
-    if (!this.factoryBoostLabel) return;
+    if (!this.factoryBoostBtn) return;
     const sec = Math.floor(Date.now() / 1000);
     if (sec === this.adPanelLastSecond) return;
     this.adPanelLastSecond = sec;
-    this.factoryBoostLabel.setText(this.factoryBoostLabelText());
+    // Preserve the badge node if any was appended (CONTRACTS uses one; the
+    // factory-boost button doesn't, but the lookup is defensive).
+    const badge = this.factoryBoostBtn.querySelector('.nfr-action__badge');
+    this.factoryBoostBtn.textContent = this.factoryBoostBoostLabelText();
+    if (badge) this.factoryBoostBtn.appendChild(badge);
     this.applyFactoryBoostVisuals();
-    // Rebuild the whole panel if the boost just ended (cooldown text differs
-    // from active text, and we might want to enable a queued claim).
-    if (!AdManager.isFactoryBoostActive() && this.factoryBoostBg && this.factoryBoostBg.alpha < 1) {
-      // No-op: actual rebuild only on user-action paths to avoid flicker.
-    }
   }
 
   private factoryBoostLabelText(): string {
+    return this.factoryBoostBoostLabelText();
+  }
+
+  private factoryBoostBoostLabelText(): string {
     if (AdManager.isFactoryBoostActive()) {
       const secs = AdManager.factoryBoostCooldownRemainingSec();
       return `${Strings.adFactoryBoostActive} ${secs}s`;
@@ -1461,58 +1495,21 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   private applyFactoryBoostVisuals(): void {
-    if (!this.factoryBoostBg || !this.factoryBoostLabel) return;
+    const btn = this.factoryBoostBtn;
+    if (!btn) return;
     const onCd = AdManager.isFactoryBoostOnCooldown();
     const active = AdManager.isFactoryBoostActive();
+    btn.classList.remove('gold', 'green', 'is-active', 'is-disabled');
     if (active) {
-      this.factoryBoostBg.setFillStyle(0x72ff9f, 0.9);
-      this.factoryBoostBg.setStrokeStyle(2, 0xffffff, 0.85);
-      this.factoryBoostBg.disableInteractive();
-      this.factoryBoostLabel.setColor('#000000');
+      btn.classList.add('green', 'is-active');
+      btn.disabled = true;
     } else if (onCd) {
-      this.factoryBoostBg.setFillStyle(0x444444, 0.6);
-      this.factoryBoostBg.setStrokeStyle(1, 0xffffff, 0.25);
-      this.factoryBoostBg.disableInteractive();
-      this.factoryBoostLabel.setColor('#888888');
+      btn.classList.add('gold', 'is-disabled');
+      btn.disabled = true;
     } else {
-      this.factoryBoostBg.setFillStyle(0xffd75a, 1);
-      this.factoryBoostBg.setStrokeStyle(2, 0xffffff, 0.9);
-      this.factoryBoostBg.setInteractive({ useHandCursor: true });
-      this.factoryBoostLabel.setColor('#000000');
+      btn.classList.add('gold');
+      btn.disabled = false;
     }
-  }
-
-  // Shared button factory for the M20 ad panel. Pure visual; click handler
-  // is wired by the caller because each placement runs different logic.
-  private makeAdButton(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    text: string,
-    bgColor: number,
-    onClick: () => void,
-  ): { bg: Phaser.GameObjects.Rectangle; label: Phaser.GameObjects.Text } {
-    const bg = this.add
-      .rectangle(x, y, w, h, bgColor, 1)
-      .setOrigin(0, 0)
-      .setStrokeStyle(2, 0xffffff, 0.9)
-      .setScrollFactor(0)
-      .setDepth(2050)
-      .setInteractive({ useHandCursor: true });
-    bg.on('pointerover', () => bg.setFillStyle(bgColor, 0.85));
-    bg.on('pointerout', () => bg.setFillStyle(bgColor, 1));
-    bg.on('pointerdown', onClick);
-    const label = this.add
-      .text(x + w / 2, y + h / 2, text, {
-        fontFamily: 'monospace',
-        fontSize: '13px',
-        color: '#000000',
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(2051);
-    return { bg, label };
   }
 
   private async handleFactoryBoost(): Promise<void> {
@@ -1649,6 +1646,25 @@ export class FactoryScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2052);
     this.seasonPanelObjects.push(barFill);
+
+    // Retention pass — show how many XP (i.e. raid completions) remain until
+    // the next tier reward so the player always feels "1 raid away" from a
+    // dopamine hit. Hidden once the season is fully claimed.
+    if (prog.tier < prog.max) {
+      const remaining = Math.max(1, prog.xpPerTier - prog.xp);
+      const hint = this.add
+        .text(x, y + h + 4, `${remaining} XP → Tier ${prog.tier + 1}`, {
+          fontFamily: 'monospace',
+          fontSize: '10px',
+          color: '#cfa8ff',
+          stroke: '#000000',
+          strokeThickness: 2,
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(2051);
+      this.seasonPanelObjects.push(hint);
+    }
   }
 
   private destroySeasonPanel(): void {

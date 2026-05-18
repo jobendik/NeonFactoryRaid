@@ -16,7 +16,7 @@ import { UpgradeEffects } from '../systems/UpgradeSystem';
 import { Balance } from '../config/Balance';
 import { Strings } from '../config/Strings';
 import { EnemyDefs } from '../config/EnemyDefs';
-import { PowerupDefs } from '../config/PowerupDefs';
+import { PowerupDefs, type PowerupKind } from '../config/PowerupDefs';
 import { bus, Events } from '../core/EventBus';
 import { saveSystem } from '../platform/SaveSystem';
 import { MusicEngine } from '../audio/music';
@@ -32,10 +32,21 @@ import type { DraftSceneInit } from './DraftScene';
 import { Rng, dailySeed } from '../core/Rng';
 import { SDKBridge } from '../platform/SDKBridge';
 import { AdManager } from '../platform/AdManager';
+import { Analytics } from '../platform/Analytics';
 import { SpatialGrid } from '../systems/SpatialGrid';
 import { QualityManager } from '../systems/QualityManager';
+import {
+  ensureCommonFX,
+  applyGlow,
+  RAID_BG_KEY,
+  STARFIELD_FAR_KEY,
+  STARFIELD_NEAR_KEY,
+  VIGNETTE_KEY,
+} from '../systems/NeonFX';
 import { AchievementSystem } from '../systems/AchievementSystem';
 import { SeasonSystem } from '../systems/SeasonSystem';
+import { RetentionSystem } from '../systems/RetentionSystem';
+import { RefinerySystem } from '../systems/RefinerySystem';
 import {
   sfxCore,
   sfxScrap,
@@ -156,12 +167,50 @@ export class RaidScene extends Phaser.Scene {
   private pickupScratch: Pickup[] = [];
   private powerupScratch: Powerup[] = [];
   private powerupGrid = new SpatialGrid<Powerup>();
+  // Turret Drop power-up — when active, a friendly turret sits at the player's
+  // position at activation time and auto-fires on the nearest enemy. We
+  // anchor at activation so dropping it as you move feels like placing a
+  // sentry rather than a follower.
+  private turret: { x: number; y: number; cooldown: number; gfx: Phaser.GameObjects.Graphics } | null = null;
   private onPlayerDied = (): void => {
     void this.handlePlayerDied();
+  };
+  // Nova Dash card — fire a damaging ring at the dash origin if the
+  // novaDashRadius mod is non-zero.
+  private onPlayerDashed = (...args: unknown[]): void => {
+    if (this.runMods.novaDashRadius <= 0 || this.runMods.novaDashDamage <= 0) return;
+    const x = args[0] as number;
+    const y = args[1] as number;
+    const r = this.runMods.novaDashRadius;
+    const r2 = r * r;
+    const dmg = this.runMods.novaDashDamage;
+    // Draw a short-lived visual ring.
+    const gfx = this.add.graphics();
+    gfx.setDepth(12);
+    gfx.lineStyle(4, 0xffd75a, 1);
+    gfx.strokeCircle(x, y, r);
+    this.tweens.add({
+      targets: gfx,
+      alpha: 0,
+      duration: 240,
+      onComplete: () => gfx.destroy(),
+    });
+    // Damage all enemies in radius via spatial grid.
+    const nearby = this.enemyGrid.queryNearby(x, y, r, []);
+    for (const e of nearby) {
+      if (!e.active) continue;
+      const dx = e.x - x;
+      const dy = e.y - y;
+      if (dx * dx + dy * dy <= r2) {
+        this.processHit(e, dmg, x, y, false);
+      }
+    }
   };
   private onExtractionComplete = (): void => this.beginExtractionMoment();
   private onExtractionOpened = (): void => {
     this.greed.start();
+    // Tells WaveDirector that Extract Jammers may now spawn.
+    this.waveDirector.setExtractionOpen(true);
     sfxExtractionOpen();
   };
 
@@ -313,6 +362,8 @@ export class RaidScene extends Phaser.Scene {
     // card picks layer cleanly on top of operator base values.
     this.runMods = createDefaultRunMods();
     OperatorSystem.applyOperatorMods(this.runMods);
+    // Refinery — Drone Overclock adds +1 starting drone permanently.
+    this.runMods.bonusWeaponTargets += RefinerySystem.bonusStartingDrones();
     this.magnetStormRemaining = 0;
     // rng was seeded above (mode-dependent); DraftSystem and all subsystems
     // share the same instance.
@@ -326,6 +377,7 @@ export class RaidScene extends Phaser.Scene {
     bus.on(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.on(Events.EXTRACTION_OPENED, this.onExtractionOpened);
     bus.on(Events.DRAFT_PICKED, this.onDraftPicked);
+    bus.on(Events.PLAYER_DASHED, this.onPlayerDashed);
 
     MusicEngine.startRaid();
     // M20 — bracket the raid with SDK lifecycle calls (§18.3). Tutorial is
@@ -336,6 +388,11 @@ export class RaidScene extends Phaser.Scene {
     this.revivePromptShown = false;
     this.adInFlight = false;
     bus.emit(Events.RAID_STARTED, this.mode);
+    Analytics.track(this.isTutorial ? 'tutorial_started' : 'raid_started', {
+      mode: this.mode,
+      operatorId: saveSystem.get().selectedOperator,
+      raidNumber: saveSystem.get().raidsCompleted,
+    });
   }
 
   // Bus handler bound once in create() so we can off() it on shutdown without
@@ -464,18 +521,95 @@ export class RaidScene extends Phaser.Scene {
 
     // Push current power-up state into the weapon. Cheap to do every frame -
     // the setters are just field writes.
-    this.weapons.setFireRateMult(this.powerupSystem.getFireRateMult());
+    // Frenzy Mode card composes a fire-rate boost when player HP drops below
+    // frenzyHpFraction.
+    const playerHpFrac = this.player.hp / Math.max(1, this.player.maxHp);
+    const frenzyActive =
+      this.runMods.frenzyHpFraction > 0 && playerHpFrac < this.runMods.frenzyHpFraction;
+    const frenzyMult = frenzyActive ? 1 / Math.max(0.01, this.runMods.frenzyFireMult) : 1;
+    this.weapons.setFireRateMult(this.powerupSystem.getFireRateMult() * frenzyMult);
     this.weapons.setTargetsPerShot(this.powerupSystem.getTargetsPerShot());
 
     const frozen = this.powerupSystem.isFreezeActive();
+    // Reset per-frame buff state — Shield Carrier aura is recomputed below.
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active) continue;
+      e.buffedDamageReduction = 0;
+    }
+    // Pre-pass: apply Shield Carrier auras + tally Extract Jammer slow.
+    let jammerSlow = 1;
+    for (const child of this.enemies.getChildren()) {
+      const e = child as Enemy;
+      if (!e.active) continue;
+      if (e.kind === 'shieldCarrier') {
+        const r = Balance.enemies.shieldCarrier.auraRadius;
+        const r2 = r * r;
+        const nearby = this.enemyGrid.queryNearby(e.x, e.y, r, []);
+        for (const other of nearby) {
+          if (!other.active || other === e) continue;
+          const dx = other.x - e.x;
+          const dy = other.y - e.y;
+          if (dx * dx + dy * dy <= r2) {
+            other.buffedDamageReduction = Math.max(
+              other.buffedDamageReduction,
+              Balance.enemies.shieldCarrier.auraDamageReduction,
+            );
+          }
+        }
+      }
+      if (e.kind === 'extractJammer' && this.extraction.isOpen()) {
+        const pad = this.extraction.getPadPosition();
+        const dx = e.x - pad.x;
+        const dy = e.y - pad.y;
+        const r = Balance.enemies.extractJammer.auraRadius;
+        if (dx * dx + dy * dy <= r * r) {
+          jammerSlow = Math.min(jammerSlow, Balance.enemies.extractJammer.timerSlowFactor);
+        }
+      }
+    }
+    this.extraction.setExternalFillMult(jammerSlow);
+
+    // Slow Field card — radius around player drags enemies inside to a
+    // fraction of normal step. We scale dt for those enemies. Cheaper than
+    // mutating their speed each frame.
+    const slowFactor = this.runMods.slowFieldFactor;
+    const slowRad2 = slowFactor > 0 ? Balance.cards.slowFieldRadius * Balance.cards.slowFieldRadius : 0;
+    // Time Dilation card — global enemy-speed multiplier (1.0 = no effect).
+    const globalEnemyMult = this.runMods.enemySpeedMult;
+
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
       if (!e.active) continue;
       // Visual cue while Freeze Pulse is up; restored to white on thaw.
       if (frozen) e.setTint(Balance.powerups.freezeTint);
       else e.clearTint();
-      const r = e.tick(dt, this.player.x, this.player.y, frozen);
+      // Per-enemy dt scaling: time-dilation always applies; slow-field also
+      // applies if inside the radius. Frozen short-circuits inside tick().
+      let mult = globalEnemyMult;
+      if (slowFactor > 0) {
+        const dx = e.x - this.player.x;
+        const dy = e.y - this.player.y;
+        if (dx * dx + dy * dy <= slowRad2) mult *= 1 - slowFactor;
+      }
+      const r = e.tick(dt * mult, this.player.x, this.player.y, frozen);
       if (r.fired) this.spawnEnemyBullet(r.fired.fromX, r.fired.fromY, r.fired.dirX, r.fired.dirY);
+      // Bomber detonation: damage player if in radius, kill the bomber.
+      if (r.exploded) {
+        const ex = r.exploded;
+        const pdx = this.player.x - ex.x;
+        const pdy = this.player.y - ex.y;
+        if (pdx * pdx + pdy * pdy <= ex.radius * ex.radius) {
+          this.player.takeDamage(ex.damage);
+        }
+        this.particles.enemyDeath(e.kind, e.x, e.y);
+        e.kill();
+      }
+      // Loot Goblin lifetime expired without being caught — silently despawn,
+      // no rewards. Player missed the chase.
+      if (r.expired) {
+        e.kill();
+      }
     }
 
     const hits = this.weapons.update(dt);
@@ -522,6 +656,7 @@ export class RaidScene extends Phaser.Scene {
     this.tickAdaptiveMusic();
     this.tickNearMiss();
     this.tickOperatorOrbs(dt);
+    this.tickTurret(dt);
     DailyQuestSystem.tickRaidElapsed(this.elapsed);
 
     if (this.timeRemaining <= 0 && !this.adInFlight) {
@@ -699,19 +834,26 @@ export class RaidScene extends Phaser.Scene {
   }
 
   // Update the §7.3 visual escalation overlays for the current greed step.
+  // Reduced-motion players see a flat (non-pulsing) low-intensity vignette
+  // and no deep-end tint sweep, per accessibility expectations.
   private updateGreedVisuals(step: number): void {
     const esc = Balance.raid.greedEscalation[Math.max(0, Math.min(Balance.raid.greedEscalation.length - 1, step))];
+    const reducedMotion = QualityManager.isReducedMotion();
     const g = this.greedVignette;
     if (g) {
-      // Mild sine pulse on top of the step-base intensity so the danger
-      // frame breathes rather than sits flat.
-      const breathe = (Math.sin(this.elapsed * 3.4) + 1) / 2;
-      const alpha = Math.max(0, Math.min(1, esc.vignette * (0.85 + breathe * 0.3)));
-      g.setAlpha(alpha);
+      if (reducedMotion) {
+        // Flat half-intensity overlay — communicates danger without pulsing.
+        g.setAlpha(Math.min(0.35, esc.vignette * 0.5));
+      } else {
+        // Mild sine pulse on top of the step-base intensity so the danger
+        // frame breathes rather than sits flat.
+        const breathe = (Math.sin(this.elapsed * 3.4) + 1) / 2;
+        const alpha = Math.max(0, Math.min(1, esc.vignette * (0.85 + breathe * 0.3)));
+        g.setAlpha(alpha);
+      }
     }
     if (this.deepEndTint) {
-      const want = step >= Balance.raid.deepEndTintAt ? 0.42 : 0;
-      // Cheap lerp toward target so the tint glides in rather than snapping.
+      const want = !reducedMotion && step >= Balance.raid.deepEndTintAt ? 0.42 : 0;
       const cur = this.deepEndTint.alpha;
       this.deepEndTint.setAlpha(cur + (want - cur) * 0.05);
     }
@@ -722,6 +864,7 @@ export class RaidScene extends Phaser.Scene {
     bus.off(Events.EXTRACTION_COMPLETE, this.onExtractionComplete);
     bus.off(Events.EXTRACTION_OPENED, this.onExtractionOpened);
     bus.off(Events.DRAFT_PICKED, this.onDraftPicked);
+    bus.off(Events.PLAYER_DASHED, this.onPlayerDashed);
     this.waveDirector.stop();
     this.inputSystem.destroy();
     this.particles.destroy();
@@ -740,6 +883,11 @@ export class RaidScene extends Phaser.Scene {
     this.nearMissAwarded.clear();
     for (const o of this.operatorOrbs) o.destroy();
     this.operatorOrbs = [];
+    if (this.turret) {
+      this.turret.gfx.destroy();
+      this.turret = null;
+    }
+    this.weapons.destroy?.();
     bus.emit(Events.RAID_ENDED);
   }
 
@@ -859,11 +1007,33 @@ export class RaidScene extends Phaser.Scene {
 
   // ---- internals ----
 
-  private onEnemyKilled(): void {
+  private onEnemyKilled(x?: number, y?: number, victim?: Enemy): void {
     this.combo = Math.min(Balance.raid.comboMax, this.combo + Balance.raid.comboPerKill);
     this.comboGrace = Balance.raid.comboGraceSec;
     bus.emit(Events.COMBO_CHANGED, this.combo);
-    bus.emit(Events.ENEMY_KILLED);
+    bus.emit(Events.ENEMY_KILLED, { kind: victim?.kind });
+    // Pyrokinetic card — death emits an AoE pulse damaging nearby enemies.
+    // Skip if no position info was supplied (chain-shot callers historically
+    // didn't pass it) or if the mod isn't active.
+    if (
+      x !== undefined &&
+      y !== undefined &&
+      this.runMods.pyroAoeRadius > 0 &&
+      this.runMods.pyroAoeDamage > 0
+    ) {
+      const r = this.runMods.pyroAoeRadius;
+      const r2 = r * r;
+      const dmg = this.runMods.pyroAoeDamage;
+      const nearby = this.enemyGrid.queryNearby(x, y, r, []);
+      for (const e of nearby) {
+        if (!e.active || e === victim) continue;
+        const dx = e.x - x;
+        const dy = e.y - y;
+        if (dx * dx + dy * dy <= r2) {
+          this.processHit(e, dmg, x, y, false);
+        }
+      }
+    }
   }
 
   private tickCombo(dt: number): void {
@@ -882,7 +1052,11 @@ export class RaidScene extends Phaser.Scene {
     const ey = enemy.y;
     // Combo scales the VALUE of each pickup (per M5 gate decision); count stays
     // fixed at the §14.3 base so we never blow past Balance.performance.maxPickups.
-    const valuePerDrop = Math.max(1, Math.round(this.combo));
+    // Golden Fever (§13) doubles the per-drop value while active.
+    const valuePerDrop = Math.max(
+      1,
+      Math.round(this.combo * this.powerupSystem.getScrapDropMult()),
+    );
     for (let i = 0; i < def.scrapDrop; i++) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
       if (!p) break;
@@ -895,7 +1069,40 @@ export class RaidScene extends Phaser.Scene {
     );
     if (this.rng.next() < coreChance) {
       const p = this.pickups.get(ex, ey) as Pickup | null;
-      if (p) p.spawn(ex, ey, 'core', valuePerDrop, this.rng);
+      if (p) {
+        p.spawn(ex, ey, 'core', valuePerDrop, this.rng);
+        // Tuning fix (suggestions audit): when the Lucky card is in play,
+        // tint cores brighter gold so the player can SEE that the card is
+        // doing something. Subtle but solves the "invisible buff" feedback gap.
+        if (this.runMods.coreChanceBonus > 0) {
+          p.setTint(0xfff200);
+        }
+      }
+    }
+
+    // §14.1 Splitter: on death, spawn 3 swarmers around the corpse so the
+    // player gets immediate pressure for clearing the parent.
+    if (enemy.kind === 'splitter') {
+      const cfg = Balance.enemies.splitter;
+      for (let i = 0; i < cfg.spawnCount; i++) {
+        const a = (i / cfg.spawnCount) * Math.PI * 2;
+        const sx = ex + Math.cos(a) * cfg.spawnSpread;
+        const sy = ey + Math.sin(a) * cfg.spawnSpread;
+        const child = this.enemies.get(sx, sy) as Enemy | null;
+        if (child) child.spawn(sx, sy, 'swarmer', 1, this.rng);
+      }
+    }
+    // §14.1 Loot Goblin bonus: 5% chance to also drop a power-up.
+    if (
+      enemy.kind === 'lootGoblin' &&
+      this.rng.next() < Balance.enemies.lootGoblin.powerupDropChance
+    ) {
+      const pu = this.powerups.get(ex, ey) as Powerup | null;
+      if (pu) {
+        const kinds = Object.keys(PowerupDefs);
+        const pick = kinds[Math.floor(this.rng.next() * kinds.length)];
+        pu.spawn(ex, ey, pick as PowerupKind);
+      }
     }
   }
 
@@ -942,47 +1149,75 @@ export class RaidScene extends Phaser.Scene {
 
   private drawBackground(): void {
     const wb = Balance.player.worldBounds;
-    // M22 §19.5 parallax: optional far + mid layers behind the main grid,
-    // both at lower alpha. Quality preset gates how many layers render —
-    // 0 (Low), 2 (Medium), 3 (High). Layers use a scrollFactor below 1 so
-    // they drift slower than the foreground as the camera follows the
-    // player, giving a subtle depth cue without competing for attention.
+    ensureCommonFX(this);
+
+    const camW = this.scale.width;
+    const camH = this.scale.height;
+    const worldW = wb.maxX - wb.minX;
+    const worldH = wb.maxY - wb.minY;
     const layers = QualityManager.parallaxLayers();
+
+    // Camera-fixed deepest backdrop — covers the viewport even when the world
+    // is panned to a corner. The raid background tile carries the gradient,
+    // soft bloom, and ambient star field.
+    const sky = this.add
+      .tileSprite(0, 0, camW + 32, camH + 32, RAID_BG_KEY)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(-100);
+    // Slow drift so the static tile reads as alive.
+    this.tweens.add({
+      targets: sky,
+      tilePositionX: { from: 0, to: 512 },
+      tilePositionY: { from: 0, to: 256 },
+      duration: 60_000,
+      repeat: -1,
+      ease: 'Linear',
+    });
+
+    // Parallax starfield — two layers at scrollFactors 0.25 / 0.55. Tiled
+    // across the world bounds with a generous overscan so panning never
+    // reveals an edge.
     if (layers >= 1) {
-      const far = this.add.graphics();
-      far.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.5);
-      const stepFar = Balance.ui.gridStep * 1.8;
-      for (let x = wb.minX; x <= wb.maxX; x += stepFar) {
-        far.moveTo(x, wb.minY);
-        far.lineTo(x, wb.maxY);
-      }
-      for (let y = wb.minY; y <= wb.maxY; y += stepFar) {
-        far.moveTo(wb.minX, y);
-        far.lineTo(wb.maxX, y);
-      }
-      far.strokePath();
-      far.setScrollFactor(0.3);
-      far.setDepth(-3);
+      const farStars = this.add
+        .tileSprite(wb.minX - 200, wb.minY - 200, worldW + 400, worldH + 400, STARFIELD_FAR_KEY)
+        .setOrigin(0, 0)
+        .setScrollFactor(0.25)
+        .setDepth(-50)
+        .setAlpha(0.85);
+      void farStars;
     }
     if (layers >= 2) {
-      const mid = this.add.graphics();
-      mid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha * 0.7);
-      const stepMid = Balance.ui.gridStep * 1.25;
-      for (let x = wb.minX; x <= wb.maxX; x += stepMid) {
-        mid.moveTo(x, wb.minY);
-        mid.lineTo(x, wb.maxY);
-      }
-      for (let y = wb.minY; y <= wb.maxY; y += stepMid) {
-        mid.moveTo(wb.minX, y);
-        mid.lineTo(wb.maxX, y);
-      }
-      mid.strokePath();
-      mid.setScrollFactor(0.6);
-      mid.setDepth(-2);
+      const nearStars = this.add
+        .tileSprite(wb.minX - 200, wb.minY - 200, worldW + 400, worldH + 400, STARFIELD_NEAR_KEY)
+        .setOrigin(0, 0)
+        .setScrollFactor(0.55)
+        .setDepth(-40)
+        .setAlpha(0.9);
+      void nearStars;
+    }
+    if (layers >= 3) {
+      // High-quality bonus: a third drifting dust plane for extra depth.
+      const dust = this.add
+        .tileSprite(wb.minX - 200, wb.minY - 200, worldW + 400, worldH + 400, STARFIELD_FAR_KEY)
+        .setOrigin(0, 0)
+        .setScrollFactor(0.75)
+        .setDepth(-30)
+        .setAlpha(0.4)
+        .setTint(0xa76cff);
+      this.tweens.add({
+        targets: dust,
+        tilePositionX: { from: 0, to: 512 },
+        duration: 90_000,
+        repeat: -1,
+        ease: 'Linear',
+      });
     }
 
+    // Foreground neon grid lines, slightly brighter than before so they read
+    // as a defined arena instead of a faint smear.
     const grid = this.add.graphics();
-    grid.lineStyle(1, Balance.colors.background, Balance.ui.gridAlpha);
+    grid.lineStyle(1, Balance.colors.background, 0.18);
     const step = Balance.ui.gridStep;
     for (let x = wb.minX; x <= wb.maxX; x += step) {
       grid.moveTo(x, wb.minY);
@@ -993,10 +1228,40 @@ export class RaidScene extends Phaser.Scene {
       grid.lineTo(wb.maxX, y);
     }
     grid.strokePath();
+    grid.setDepth(-10);
+    // Bright accent every 4 cells so the arena has anchor lines.
+    const accent = this.add.graphics();
+    accent.lineStyle(1.5, Balance.colors.background, 0.35);
+    const big = step * 4;
+    for (let x = wb.minX; x <= wb.maxX; x += big) {
+      accent.moveTo(x, wb.minY);
+      accent.lineTo(x, wb.maxY);
+    }
+    for (let y = wb.minY; y <= wb.maxY; y += big) {
+      accent.moveTo(wb.minX, y);
+      accent.lineTo(wb.maxX, y);
+    }
+    accent.strokePath();
+    accent.setDepth(-9);
 
+    // Glowing arena boundary frame — uses canvas shadowBlur via preFX glow on
+    // a regular Graphics. Fallback (no preFX) still shows a thicker cyan box.
     const bounds = this.add.graphics();
-    bounds.lineStyle(2, Balance.colors.background, Balance.ui.boundsAlpha);
-    bounds.strokeRect(wb.minX, wb.minY, wb.maxX - wb.minX, wb.maxY - wb.minY);
+    bounds.lineStyle(3, Balance.colors.background, 0.9);
+    bounds.strokeRect(wb.minX, wb.minY, worldW, worldH);
+    bounds.lineStyle(1, 0xffffff, 0.45);
+    bounds.strokeRect(wb.minX + 4, wb.minY + 4, worldW - 8, worldH - 8);
+    bounds.setDepth(-8);
+    applyGlow(bounds, Balance.colors.background, 6, 0);
+
+    // Screen-fixed vignette overlay so the player's eye is drawn to center.
+    // The greedVignette built later layers ON TOP of this.
+    const vignette = this.add
+      .image(camW / 2, camH / 2, VIGNETTE_KEY)
+      .setScrollFactor(0)
+      .setDepth(1200)
+      .setAlpha(0.55);
+    void vignette;
   }
 
   // ---- end-state machine ----
@@ -1061,6 +1326,22 @@ export class RaidScene extends Phaser.Scene {
     // then stop gameplay. Bracket per raid regardless of outcome.
     if (state === 'extracted') SDKBridge.happytime();
     SDKBridge.gameplayStop();
+    Analytics.track(
+      this.isTutorial
+        ? state === 'extracted'
+          ? 'tutorial_extracted'
+          : 'tutorial_failed'
+        : state === 'extracted'
+        ? 'raid_extracted'
+        : state === 'failed'
+        ? 'raid_failed'
+        : 'raid_time_collapsed',
+      {
+        mode: this.mode,
+        durationSec: Math.round(this.elapsed),
+        greedMult: this.greed.getMultiplier(),
+      },
+    );
 
     // Greed multiplies banked loot on successful extract. Death and collapse
     // both forfeit 50% of unbanked loot per the prototype rule. Combo is already
@@ -1097,6 +1378,11 @@ export class RaidScene extends Phaser.Scene {
       const todayIso = todayUtcDateForLeaderboard();
       void LeaderboardSystem.submitScore(todayIso, scrap);
     }
+    // Mission Board events — extracted-with-cores, extracted-at-greed.
+    if (state === 'extracted') {
+      bus.emit('mission:extractedWithCores', { cores });
+      bus.emit('mission:extractedAtGreed', { greed: greedMult });
+    }
 
     // M17 — apply cleanse + maybe-infest. handleRaidEnd mutates the save in
     // place; the persist() below captures everything in one shot.
@@ -1119,6 +1405,10 @@ export class RaidScene extends Phaser.Scene {
     if (!this.isTutorial) {
       AchievementSystem.handleRaidEnd({ state, greedMult, tutorial: this.isTutorial });
       SeasonSystem.awardRaidXp();
+      // Retention pass — DOUBLE PAYDAY consumes one raid regardless of
+      // outcome so the rare 2x window can't be camped by aborting raids.
+      // Tutorial raids never count so the FTUE doesn't burn the event.
+      RetentionSystem.consumePaydayRaid();
     }
 
     // Persist immediately on raid-end so the player can't lose loot to a tab
@@ -1263,8 +1553,59 @@ export class RaidScene extends Phaser.Scene {
     if (kind === 'magnetBurst') sfxMagnetBurst();
     else if (kind === 'laserOverdrive') sfxLaserOverdrive();
     else if (kind === 'freezePulse') sfxFreezePulse();
+    else if (kind === 'turretDrop') this.placeTurret(this.player.x, this.player.y);
     bus.emit(Events.POWERUP_COLLECTED, kind);
   };
+
+  // Drops a friendly auto-fire turret at (x, y). Active while the
+  // turretDrop power-up is. Disposed in tickTurret when the buff ends.
+  private placeTurret(x: number, y: number): void {
+    if (this.turret) this.turret.gfx.destroy();
+    const gfx = this.add.graphics();
+    gfx.setDepth(8);
+    gfx.fillStyle(0xff9c3d, 1);
+    gfx.fillCircle(0, 0, 11);
+    gfx.lineStyle(2, 0xffffff, 0.85);
+    gfx.strokeCircle(0, 0, 11);
+    gfx.lineBetween(0, 0, 14, 0);
+    gfx.setPosition(x, y);
+    this.turret = { x, y, cooldown: 0, gfx };
+  }
+
+  // Per-frame: fire at the nearest enemy in range, dispose when buff ends.
+  private tickTurret(dt: number): void {
+    if (!this.turret) return;
+    if (!this.powerupSystem.isTurretActive()) {
+      this.turret.gfx.destroy();
+      this.turret = null;
+      return;
+    }
+    const t = this.turret;
+    t.cooldown -= dt;
+    if (t.cooldown > 0) return;
+    // Reuse the WeaponSystem's tracer rendering for visual consistency, but
+    // pick a target from the spatial grid centered on the turret rather than
+    // the player.
+    const range = 320;
+    const nearby = this.enemyGrid.queryNearby(t.x, t.y, range, []);
+    let best: Enemy | null = null;
+    let bestD2 = range * range;
+    for (const e of nearby) {
+      if (!e.active) continue;
+      const dx = e.x - t.x;
+      const dy = e.y - t.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = e;
+      }
+    }
+    if (!best) return;
+    this.weapons.drawTracer(t.x, t.y, best.x, best.y, 0xff9c3d);
+    const dmg = (Balance.weapon.baseDamage + UpgradeEffects.weaponDamageLevel() * Balance.weapon.damagePerLevel) * 0.6;
+    this.processHit(best, dmg, t.x, t.y, false);
+    t.cooldown = 0.18;
+  }
 
   // processHit centralizes the per-hit damage path: render -damage popup, run
   // hit() / kill paths, then if Drone Swarm is up, chain to N more enemies
@@ -1286,7 +1627,7 @@ export class RaidScene extends Phaser.Scene {
       const wasElite = target.kind === 'elite';
       const wasInfested = target.kind === 'infested';
       target.kill();
-      this.onEnemyKilled();
+      this.onEnemyKilled(tx, ty, target);
       sfxEnemyDeath();
       if (wasElite) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopEliteSec);
       else if (wasTank) this.hitStopTimer = Math.max(this.hitStopTimer, Balance.raid.hitStopTankSec);
@@ -1324,7 +1665,7 @@ export class RaidScene extends Phaser.Scene {
         this.spawnDrops(next);
         const wasInfestedChain = next.kind === 'infested';
         next.kill();
-        this.onEnemyKilled();
+        this.onEnemyKilled(nextX, nextY, next);
         if (wasInfestedChain) this.cleanseProgress += 1;
       }
       fromX = nextX;
@@ -1385,7 +1726,7 @@ export class RaidScene extends Phaser.Scene {
   // of the arena still clears the wave they can see.
   private activateSignalNuke(): void {
     const r2 = Balance.powerups.signalNukeRadius * Balance.powerups.signalNukeRadius;
-    this.cameras.main.shake(180, 0.012);
+    if (!QualityManager.isReducedMotion()) this.cameras.main.shake(180, 0.012);
     sfxNuke();
     for (const child of this.enemies.getChildren()) {
       const e = child as Enemy;
@@ -1393,11 +1734,13 @@ export class RaidScene extends Phaser.Scene {
       const dx = e.x - this.player.x;
       const dy = e.y - this.player.y;
       if (dx * dx + dy * dy > r2) continue;
-      this.particles.enemyDeath(e.kind, e.x, e.y);
+      const ex = e.x;
+      const ey = e.y;
+      this.particles.enemyDeath(e.kind, ex, ey);
       this.spawnDrops(e);
       const wasInfestedNuke = e.kind === 'infested';
       e.kill();
-      this.onEnemyKilled();
+      this.onEnemyKilled(ex, ey, e);
       if (wasInfestedNuke) this.cleanseProgress += 1;
     }
     // Also clear in-flight enemy bullets so the nuke feels totally clean.

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Balance } from '../config/Balance';
+import { applyGlow } from '../systems/NeonFX';
 
 export const DRONE_TEXTURE_KEY = 'drone-body';
 
@@ -37,6 +38,7 @@ export class Drone {
     this.angle = opts.baseAngle;
     this.sprite = scene.add.sprite(0, 0, DRONE_TEXTURE_KEY);
     this.sprite.setDepth(3);
+    applyGlow(this.sprite, Balance.colors.player, 4, 0);
     if (opts.withTrail) {
       this.trailGfx = scene.add.graphics();
       this.trailGfx.setDepth(2);
@@ -80,19 +82,40 @@ export class Drone {
 
   static ensureTexture(scene: Phaser.Scene): void {
     if (scene.textures.exists(DRONE_TEXTURE_KEY)) return;
-    const dim = 16;
-    const g = scene.add.graphics();
-    g.fillStyle(Balance.colors.player, 1);
-    g.lineStyle(1, 0xffffff, 0.85);
-    g.beginPath();
-    g.moveTo(dim / 2, 1);
-    g.lineTo(dim - 1, dim / 2 + 2);
-    g.lineTo(dim / 2, dim - 1);
-    g.lineTo(1, dim / 2 + 2);
-    g.closePath();
-    g.fillPath();
-    g.strokePath();
-    g.generateTexture(DRONE_TEXTURE_KEY, dim, dim);
-    g.destroy();
+    const dim = 28;
+    const tex = scene.textures.createCanvas(DRONE_TEXTURE_KEY, dim, dim);
+    if (!tex) return;
+    const ctx = tex.context;
+    const cx = dim / 2;
+    const cy = dim / 2;
+    // Cyan halo
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, cx);
+    halo.addColorStop(0, 'rgba(34, 246, 255, 0.55)');
+    halo.addColorStop(0.5, 'rgba(34, 246, 255, 0.25)');
+    halo.addColorStop(1, 'rgba(34, 246, 255, 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, dim, dim);
+    // Diamond body with gradient
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 7);
+    ctx.lineTo(cx + 7, cy + 1);
+    ctx.lineTo(cx, cy + 7);
+    ctx.lineTo(cx - 7, cy + 1);
+    ctx.closePath();
+    const body = ctx.createLinearGradient(cx, cy - 7, cx, cy + 7);
+    body.addColorStop(0, '#e6ffff');
+    body.addColorStop(0.4, '#22f6ff');
+    body.addColorStop(1, '#0a4855');
+    ctx.fillStyle = body;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    // Bright center pip
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    tex.refresh();
   }
 }

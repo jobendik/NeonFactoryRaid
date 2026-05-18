@@ -110,6 +110,52 @@ export const Balance = {
       elite: 0.04,
     },
     scaling: { hpMult: 1.0, hpMultPerRaidSecond: 1 / 75 },
+    // Bomber (§14.1): telegraphed-explosion enemy. Per blueprint §7.3 it
+    // joins the spawn pool at greed x2 and becomes more common at higher
+    // greed steps.
+    bomber: {
+      // Per-second chance to spawn an extra Bomber on top of the base wave,
+      // indexed by greed step. Step 0 / 1 = none; step 2 onward = increasing.
+      spawnChancePerSecByGreedStep: [0, 0, 0.18, 0.32, 0.55] as const,
+      telegraphSec: 0.5,
+      explosionRadius: 90,
+      explosionDamage: 28,
+      chargeSpeedMult: 1.15,
+    },
+    // Loot Goblin (§14.1): flees from player, drops fat reward if killed
+    // before despawning. Spawns rarely on any raid.
+    lootGoblin: {
+      spawnIntervalMin: 25,
+      spawnIntervalMax: 45,
+      lifetimeSec: 12,
+      fleeSpeedMult: 1.25,
+      powerupDropChance: 0.05,
+    },
+    // Shield Carrier (§14.1): auras a damage-reduction buff to nearby
+    // enemies. Players must take the carrier out first to power-spike.
+    shieldCarrier: {
+      auraRadius: 140,
+      auraDamageReduction: 0.55,
+      // Rolled per spawn cycle alongside the base table once unlocked.
+      spawnWeight: 0.06,
+      unlockAtGreedStep: 2,
+    },
+    // Splitter (§14.1): on death spawns N swarmers around the corpse.
+    splitter: {
+      spawnCount: 3,
+      spawnSpread: 22,
+      spawnWeight: 0.05,
+      unlockAtGreedStep: 1,
+    },
+    // Extract Jammer (§14.1): targets the extraction pad, slows the fill
+    // timer while within auraRadius of the pad center.
+    extractJammer: {
+      auraRadius: 160,
+      timerSlowFactor: 0.35,
+      spawnWeight: 0.10,
+      // Only spawns once extraction has opened.
+      onlyAfterExtractOpen: true,
+    },
   },
   economy: {
     upgrades: {
@@ -201,7 +247,7 @@ export const Balance = {
       medium: {
         dprCap: 1.5,
         maxParticles: 240,
-        glow: false,
+        glow: true,
         parallaxLayers: 2,
         enemyCap: 28,
       },
@@ -223,7 +269,7 @@ export const Balance = {
   rendering: {
     width: 1280,
     height: 720,
-    backgroundColor: '#000000',
+    backgroundColor: '#03060b',
   },
   ui: {
     joystickMaxRadius: 90,
@@ -339,11 +385,24 @@ export const Balance = {
     burstFireAdd: 0.10,
     luckyAdd: 0.05,
     dashMasterMult: 0.70,         // ×0.7 cooldown
-    healOnPickupAdd: 1,
+    // Suggestions audit tuning fix: original 1 HP/scrap felt slow. Bumped
+    // to 2 so the card has a noticeable healing cadence.
+    healOnPickupAdd: 2,
     critChanceAdd: 0.15,
     critMult: 3.0,
     vampiricChanceAdd: 0.10,
     vampiricHeal: 5,
+    // Suggestions audit — previously-deferred cards. Tunings chosen
+    // conservatively so picks feel meaningful without dominating builds.
+    slowFieldRadius: 100,
+    slowFieldFactor: 0.30,           // enemies in radius move at 70% speed
+    frenzyHpFraction: 0.30,          // < 30% HP triggers
+    frenzyFireMult: 0.50,            // 50% faster fire while in frenzy
+    novaDashRadius: 110,
+    novaDashDamage: 18,
+    timeDilationFactor: 0.85,        // global enemy speed ×0.85
+    pyroAoeRadius: 80,
+    pyroAoeDamage: 12,
   },
   // §17 rewarded ad placements. All tuning lives here so the §17.3 frequency
   // rules are one-file changes if we revisit them. Real ads are post-launch;

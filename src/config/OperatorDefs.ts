@@ -54,27 +54,34 @@ export const OperatorDefs: Record<OperatorId, OperatorDef> = {
       m.damageMult *= 0.9;
     },
   },
-  // ---- LOCKED — full implementation in a future content run ----
+  // §11 Surge — glass cannon. +50% damage, -25% HP. Player.applyOperatorMods
+  // bakes the bonusHP delta from RunMods into max HP at raid start; here we
+  // mark it negative to drop HP. Damage runs through the standard damageMult.
   surge: {
     id: 'surge',
     name: Strings.operatorSurgeName,
     description: Strings.operatorSurgeDesc,
     unlockCost: 100,
     color: 0xff416b,
-    locked: true,
-    apply: () => {
-      // Glass cannon kit: +50% damage, -25% HP. Implementation deferred.
+    locked: false,
+    apply: m => {
+      m.damageMult *= 1.5;
+      // -25% HP — Player reads baseHP and adds bonusHP at raid start.
+      // Negative bonusHP becomes negative max-HP delta in applyRunMods.
+      m.bonusHP -= 26; // -25% of baseHP 105 ≈ 26
     },
   },
+  // §11 Lodestone — loot vacuum. +100% magnet, slower movement.
   lodestone: {
     id: 'lodestone',
     name: Strings.operatorLodestoneName,
     description: Strings.operatorLodestoneDesc,
     unlockCost: 200,
     color: 0xffd75a,
-    locked: true,
-    apply: () => {
-      // Loot vacuum: +100% magnet, slower movement. Implementation deferred.
+    locked: false,
+    apply: m => {
+      m.magnetMult *= 2.0;
+      m.speedMult *= 0.85;
     },
   },
 };

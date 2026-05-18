@@ -1,15 +1,40 @@
 // Enemy definitions from blueprint.md §14.1 and §14.3.
 // M5 ships the four base kinds (Grunt, Swarmer, Tank, Shooter).
 // M14 adds the 'elite' boss-wave variant that spawns at Greed x3 per §7.3.
-// Bomber, Loot Goblin, Shield Carrier, Splitter, Extract Jammer and the
-// Signal Hydra boss from §14.1 are deferred to a later content pass.
-// TODO(content): Bomber telegraphed explosion at greed x2 per §7.3.
+// Suggestions audit adds: Bomber, Loot Goblin, Shield Carrier, Splitter,
+// Extract Jammer per §14.1.
 
 import { Balance } from './Balance';
 
-export type EnemyKind = 'grunt' | 'swarmer' | 'tank' | 'shooter' | 'elite' | 'infested';
+export type EnemyKind =
+  | 'grunt'
+  | 'swarmer'
+  | 'tank'
+  | 'shooter'
+  | 'elite'
+  | 'infested'
+  | 'bomber'
+  | 'lootGoblin'
+  | 'shieldCarrier'
+  | 'splitter'
+  | 'extractJammer';
 
-export type EnemyBehavior = 'chaser' | 'shooter';
+export type EnemyBehavior =
+  | 'chaser'
+  | 'shooter'
+  | 'bomber'
+  | 'fleeing'
+  | 'buffer'
+  | 'extractJammer';
+
+export type EnemyShape =
+  | 'triangle'
+  | 'square'
+  | 'pentagon'
+  | 'circle'
+  | 'diamond'
+  | 'hexagon'
+  | 'spiked';
 
 export interface EnemyDef {
   hp: number;
@@ -17,7 +42,7 @@ export interface EnemyDef {
   size: number;
   color: number;
   textureKey: string;
-  shape: 'triangle' | 'square' | 'pentagon';
+  shape: EnemyShape;
   behavior: EnemyBehavior;
   scrapDrop: number;
   coreChance: number;
@@ -73,9 +98,7 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     coreChance: 0.14,
     contactDamage: 8,
   },
-  // §7.3 boss-wave elite. Stats are 4× Tank per the M14 spec (HP and contact
-  // damage); size scaled up so the visual reads as a boss. Distinctive color
-  // separates it from the Tank's orange.
+  // §7.3 boss-wave elite. Stats are 4× Tank per the M14 spec.
   elite: {
     hp: 240,
     speed: 64,
@@ -88,10 +111,7 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     coreChance: 0.55,
     contactDamage: 28,
   },
-  // §4 infestation wave - red-tinted swarmer variant. Spawns only when the
-  // player has any infested machines, in addition to the normal wave roll.
-  // Each kill registers cleanse progress against
-  // Balance.infestation.killsToRestoreMachine.
+  // §4 infestation wave - red-tinted swarmer variant.
   infested: {
     hp: 18,
     speed: 130,
@@ -103,6 +123,78 @@ export const EnemyDefs: Record<EnemyKind, EnemyDef> = {
     scrapDrop: 2,
     coreChance: 0,
     contactDamage: 6,
+  },
+  // §14.1 Bomber. Charges player, telegraphs 0.5s expanding ring, explodes
+  // for AoE. Contact damage is 0 — the explosion is the threat. Spawns at
+  // greed step 2+. Per-Bomber explosion stats live in Balance.enemies.bomber.
+  bomber: {
+    hp: 18,
+    speed: 100,
+    size: 26,
+    color: 0xff7a3d,
+    textureKey: 'enemy-bomber',
+    shape: 'circle',
+    behavior: 'bomber',
+    scrapDrop: 5,
+    coreChance: 0,
+    contactDamage: 0,
+  },
+  // §14.1 Loot Goblin. Flees from player, drops fat reward if killed.
+  // Despawns after lifetimeSec if not caught. 80% Core chance is the
+  // highest in the roster; this is the dopamine-spike enemy.
+  lootGoblin: {
+    hp: 30,
+    speed: 180,
+    size: 26,
+    color: 0xffd75a,
+    textureKey: 'enemy-lootgoblin',
+    shape: 'diamond',
+    behavior: 'fleeing',
+    scrapDrop: 30,
+    coreChance: 0.80,
+    contactDamage: 0,
+  },
+  // §14.1 Shield Carrier. Buffs nearby enemies (reduces damage they take).
+  // Player must clear the Carrier first to break the formation.
+  shieldCarrier: {
+    hp: 45,
+    speed: 50,
+    size: 34,
+    color: 0x4080ff,
+    textureKey: 'enemy-shieldcarrier',
+    shape: 'hexagon',
+    behavior: 'buffer',
+    scrapDrop: 7,
+    coreChance: 0.18,
+    contactDamage: 8,
+  },
+  // §14.1 Splitter. On death spawns 3 swarmers (handled in RaidScene at
+  // kill time, not here — this entry just describes the parent).
+  splitter: {
+    hp: 35,
+    speed: 80,
+    size: 32,
+    color: 0xff44ff,
+    textureKey: 'enemy-splitter',
+    shape: 'triangle',
+    behavior: 'chaser',
+    scrapDrop: 6,
+    coreChance: 0.08,
+    contactDamage: 10,
+  },
+  // §14.1 Extract Jammer. Targets the extraction pad. Slows the fill timer
+  // while it's near the pad center. Only spawns after extraction opens.
+  extractJammer: {
+    hp: 40,
+    speed: 90,
+    size: 28,
+    color: 0x222244,
+    textureKey: 'enemy-extractjammer',
+    shape: 'spiked',
+    behavior: 'extractJammer',
+    scrapDrop: 8,
+    coreChance: 0.20,
+    contactDamage: 12,
   },
 };
 
